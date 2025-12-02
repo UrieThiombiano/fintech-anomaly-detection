@@ -302,457 +302,229 @@ def page_eda(df_raw, user_features, tx_features):
         })
         st.dataframe(desc_df, use_container_width=True)
 
-def page_acp(user_features):
-    """Page d'analyse PCA avancée."""
-    st.markdown('<h1 class="main-header">🔬 Analyse en Composantes Principales Avancée</h1>', unsafe_allow_html=True)
+def page_acp(user_features: pd.DataFrame):
+    """Page d'analyse PCA améliorée."""
+    st.markdown('<h1 class="main-header">📊 Analyse en Composantes Principales Avancée</h1>', unsafe_allow_html=True)
     
-    # ==================== SECTION 1: INTRODUCTION PÉDAGOGIQUE ====================
+    # Introduction pédagogique
     st.markdown("""
     <div class="info-box">
-    <h3>🎯 Objectif scientifique de l'ACP</h3>
-    <p>L'Analyse en Composantes Principales est une <b>technique d'algèbre linéaire</b> qui permet de :</p>
+    <h3>🎯 Qu'est-ce que l'ACP ?</h3>
+    <p>L'Analyse en Composantes Principales est une méthode de réduction de dimensionnalité qui :</p>
     <ul>
-    <li><b>Réduire la dimensionnalité</b> tout en conservant l'information maximale</li>
-    <li><b>Identifier les axes de variance</b> principaux dans les données</li>
-    <li><b>Visualiser les corrélations</b> entre variables multidimensionnelles</li>
-    <li><b>Détecter les patterns cachés</b> et structures latentes</li>
+    <li><b>Réduit le nombre de variables</b> tout en conservant l'information maximale</li>
+    <li><b>Identifie les patterns</b> cachés dans les données</li>
+    <li><b>Visualise les relations</b> entre variables et individus</li>
+    <li><b>Détecte les outliers</b> et les observations atypiques</li>
     </ul>
     </div>
     """, unsafe_allow_html=True)
     
-    # Badges scientifiques
-    st.markdown("""
-    <div style="display: flex; gap: 10px; margin: 20px 0;">
-        <span class="badge" style="background-color: #2E7D32; color: white; padding: 8px 15px; border-radius: 20px; font-weight: bold;">🧮 Algèbre Linéaire</span>
-        <span class="badge" style="background-color: #1565C0; color: white; padding: 8px 15px; border-radius: 20px; font-weight: bold;">📈 Analyse Multivariée</span>
-        <span class="badge" style="background-color: #6A1B9A; color: white; padding: 8px 15px; border-radius: 20px; font-weight: bold;">🔍 Réduction Dimensionnelle</span>
-        <span class="badge" style="background-color: #C2185B; color: white; padding: 8px 15px; border-radius: 20px; font-weight: bold;">📊 Statistiques Avancées</span>
-    </div>
-    """, unsafe_allow_html=True)
+    # Paramètres avancés
+    with st.sidebar.expander("⚙️ Paramètres avancés PCA", expanded=False):
+        n_components = st.slider(
+            "Nombre de composantes",
+            min_value=2,
+            max_value=min(10, user_features.shape[1]),
+            value=min(3, user_features.shape[1]),
+            help="Nombre de composantes principales à calculer"
+        )
+        
+        variance_threshold = st.slider(
+            "Seuil de variance minimale",
+            min_value=0.5,
+            max_value=0.99,
+            value=0.9,
+            step=0.05,
+            help="Variance minimale à conserver si choix automatique"
+        )
+        
+        show_3d = st.checkbox("Afficher la visualisation 3D", value=True)
+        show_biplot = st.checkbox("Afficher le biplot", value=True)
     
-    # Colonnes d'explication
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("""
-        <div class="metric-card">
-        <h4>🎯 Principe mathématique</h4>
-        <p><b>Diagonalisation</b> de la matrice de covariance</p>
-        <p><b>Vecteurs propres</b> = directions de variance maximale</p>
-        <p><b>Valeurs propres</b> = importance des axes</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="metric-card">
-        <h4>📐 Objectifs analytiques</h4>
-        <p><b>1. Simplification</b> : n → k dimensions</p>
-        <p><b>2. Interprétation</b> : comprendre les relations</p>
-        <p><b>3. Visualisation</b> : représenter l'essentiel</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("""
-        <div class="metric-card">
-        <h4>🔍 Applications fintech</h4>
-        <p><b>Segmentation clients</b> : profils comportementaux</p>
-        <p><b>Détection patterns</b> : transactions atypiques</p>
-        <p><b>Analyse risques</b> : corrélations cachées</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # ==================== SECTION 2: PRÉPARATION DES DONNÉES ====================
-    st.markdown("---")
-    st.markdown('<h2 class="sub-header">🔧 Préparation des Données</h2>', unsafe_allow_html=True)
-    
-    with st.expander("📋 Processus de prétraitement avancé", expanded=True):
-        st.markdown("""
-        ### Pipeline de préparation rigoureux
-        
-        **Étape 1 : Vérification des types de données**
-        - Identification variables numériques vs catégorielles
-        - Conversion optimale pour préservation information
-        
-        **Étape 2 : Traitement des valeurs manquantes**
-        - Analyse pattern de manquants
-        - Imputation par médiane/moyenne selon distribution
-        - Suppression si >50% manquants
-        
-        **Étape 3 : Gestion des outliers**
-        - Détection par scores Z
-        - Winsorization aux percentiles 1 et 99
-        - Préservation variance sans distortion
-        
-        **Étape 4 : Standardisation**
-        - Centrage (moyenne = 0)
-        - Réduction (écart-type = 1)
-        - Comparabilité des variables
-        """)
-        
-        # Afficher les statistiques de préparation
-        if not user_features.empty:
-            st.subheader("📊 Statistiques descriptives avant PCA")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.metric("Nombre d'observations", f"{user_features.shape[0]:,}")
-                st.metric("Variables initiales", user_features.shape[1])
-                
-                # Types de données
-                dtype_counts = user_features.dtypes.value_counts()
-                st.write("**Types de données :**")
-                for dtype, count in dtype_counts.items():
-                    st.write(f"- {dtype}: {count} variables")
-            
-            with col2:
-                # Valeurs manquantes
-                missing = user_features.isna().sum()
-                missing_pct = (missing / len(user_features) * 100).round(2)
-                
-                st.write("**Valeurs manquantes :**")
-                if missing.sum() > 0:
-                    missing_df = pd.DataFrame({
-                        'Variable': missing.index,
-                        'Manquants': missing.values,
-                        '%': missing_pct.values
-                    })
-                    missing_df = missing_df[missing_df['Manquants'] > 0]
-                    st.dataframe(missing_df, use_container_width=True, hide_index=True)
-                else:
-                    st.success("✅ Aucune valeur manquante")
-    
-    # ==================== SECTION 3: CONFIGURATION DE L'ANALYSE ====================
-    st.markdown("---")
-    st.markdown('<h2 class="sub-header">⚙️ Configuration de l\'Analyse PCA</h2>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # Paramètres avancés
-        st.subheader("Paramètres analytiques")
-        
-        tab1, tab2, tab3 = st.tabs(["📏 Composantes", "🔍 Qualité", "🎯 Avancé"])
-        
-        with tab1:
-            max_components = min(10, user_features.shape[1])
-            n_components = st.slider(
-                "Nombre de composantes à calculer",
-                min_value=2,
-                max_value=max_components,
-                value=min(4, max_components),
-                help="Nombre d'axes principaux à extraire"
-            )
-            
-            variance_threshold = st.slider(
-                "Seuil de variance cumulée",
-                min_value=0.5,
-                max_value=0.99,
-                value=0.9,
-                step=0.01,
-                help="Pourcentage minimum de variance à expliquer"
-            )
-        
-        with tab2:
-            compute_advanced = st.checkbox(
-                "Calculer métriques avancées",
-                value=True,
-                help="KMO, Bartlett, communautés, stabilité bootstrap"
-            )
-            
-            perform_validation = st.checkbox(
-                "Validation croisée",
-                value=True,
-                help="Évaluation de la robustesse du modèle"
-            )
-        
-        with tab3:
-            random_state = st.number_input(
-                "Seed aléatoire",
-                min_value=0,
-                max_value=1000,
-                value=42,
-                help="Pour la reproductibilité des résultats"
-            )
-            
-            bootstrap_samples = st.slider(
-                "Échantillons bootstrap",
-                min_value=10,
-                max_value=500,
-                value=100,
-                help="Pour l'analyse de stabilité"
-            )
-    
-    with col2:
-        st.subheader("🎯 Critères de décision")
-        
-        st.markdown("""
-        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 4px solid #4CAF50;">
-        <h4>📊 Règles de sélection</h4>
-        
-        **1. Règle de Kaiser**
-        - Valeurs propres > 1
-        - Composantes significatives
-        
-        **2. Scree plot (Cattell)**
-        - Point d'inflexion
-        - Diminution marginale
-        
-        **3. Variance cumulée**
-        - Minimum 70-80%
-        - Optimal 85-95%
-        
-        **4. Interprétabilité**
-        - Loading > |0.3|
-        - Sens métier clair
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # ==================== SECTION 4: EXÉCUTION DE L'ANALYSE ====================
-    st.markdown("---")
-    st.markdown('<h2 class="sub-header">🚀 Exécution de l\'Analyse PCA</h2>', unsafe_allow_html=True)
-    
-    if st.button("🔬 Lancer l'analyse PCA avancée", type="primary", use_container_width=True):
-        with st.spinner("🧮 Calcul en cours... Cette analyse peut prendre quelques secondes"):
+    # Bouton de calcul
+    if st.button("🚀 Lancer l'analyse PCA avancée", type="primary", use_container_width=True):
+        with st.spinner("Analyse PCA en cours..."):
             try:
-                # Calcul PCA avec la fonction standard
-                pca_result = compute_pca_cached(user_features, n_components)
+                # Calcul PCA avancée
+                pca_result = compute_pca(
+                    user_features, 
+                    n_components=n_components,
+                    variance_threshold=variance_threshold
+                )
                 
-                # ==================== SECTION 4.1: RÉSULTATS GLOBAUX ====================
-                st.success("✅ Analyse PCA terminée avec succès !")
-                
-                # Métriques de qualité globale
-                st.subheader("📈 Métriques de qualité globale")
-                
-                col1, col2, col3 = st.columns(3)
+                # Dashboard de métriques
+                st.markdown("### 📈 Métriques principales")
+                col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
-                    st.metric(
-                        "Variance expliquée totale",
-                        f"{pca_result['cumulative_variance_ratio'][-1]:.1%}",
-                        help="Proportion totale de variance conservée"
-                    )
+                    total_var = pca_result['cumulative_variance'][-1] * 100
+                    st.metric("Variance totale expliquée", f"{total_var:.1f}%")
                 
                 with col2:
-                    st.metric(
-                        "Nombre de composantes",
-                        n_components,
-                        help="Axes principaux calculés"
-                    )
+                    avg_quality = pca_result['metrics']['mean_cos2'] * 100
+                    st.metric("Qualité moyenne", f"{avg_quality:.1f}%")
                 
                 with col3:
-                    st.metric(
-                        "Variables originales",
-                        user_features.shape[1],
-                        help="Réduction de dimension"
+                    kmo = pca_result['metrics'].get('kmo_measure', {}).get('kmo', 0)
+                    st.metric("Indice KMO", f"{kmo:.3f}")
+                
+                with col4:
+                    st.metric("Composantes retenues", pca_result['n_components'])
+                
+                # Onglets pour les différentes visualisations
+                tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+                    "📊 Scree Plot", 
+                    "🔵 Cercle des corrélations", 
+                    "🎯 Biplot",
+                    "🔥 Heatmap",
+                    "📈 Qualité",
+                    "📄 Rapport"
+                ])
+                
+                with tab1:
+                    st.plotly_chart(create_scree_plot(pca_result), use_container_width=True)
+                    
+                    st.markdown("""
+                    **💡 Interprétation du Scree Plot :**
+                    - **Barres bleues** : Valeurs propres de chaque composante
+                    - **Ligne rouge** : Critère de Kaiser (valeur propre > 1)
+                    - **Courbe rouge** : Variance cumulée expliquée
+                    - **Point d'inflexion** : Où la courbe s'aplatit = nombre optimal de composantes
+                    """)
+                
+                with tab2:
+                    pc_x = st.selectbox("Composante X", range(pca_result['n_components']), 0)
+                    pc_y = st.selectbox("Composante Y", range(pca_result['n_components']), 1, 
+                                      disabled=pc_x)
+                    
+                    st.plotly_chart(
+                        create_correlation_circle(pca_result, pc_x, pc_y), 
+                        use_container_width=True
+                    )
+                    
+                    st.markdown("""
+                    **💡 Interprétation du cercle des corrélations :**
+                    - **Position des points** : Corrélation avec les axes
+                    - **Taille des points** : Qualité de représentation (cos2)
+                    - **Couleur** : Qualité globale
+                    - **Proximité** : Variables corrélées positivement
+                    - **Opposition** : Variables corrélées négativement
+                    """)
+                
+                with tab3:
+                    if show_biplot and pca_result['n_components'] >= 2:
+                        st.plotly_chart(
+                            create_biplot(pca_result), 
+                            use_container_width=True
+                        )
+                        
+                        st.markdown("""
+                        **💡 Interprétation du Biplot :**
+                        - **Points bleus** : Individus dans l'espace réduit
+                        - **Vecteurs rouges** : Variables (direction et importance)
+                        - **Projections** : Individus proches ont des profils similaires
+                        - **Angles** : Relations entre variables
+                        """)
+                
+                with tab4:
+                    st.plotly_chart(
+                        create_heatmap_correlations(pca_result), 
+                        use_container_width=True
+                    )
+                    
+                    st.markdown("""
+                    **💡 Interprétation de la Heatmap :**
+                    - **Bleu** : Corrélation positive forte
+                    - **Rouge** : Corrélation négative forte
+                    - **Blanc** : Faible corrélation
+                    - Permet d'identifier rapidement les variables importantes pour chaque axe
+                    """)
+                
+                with tab5:
+                    st.plotly_chart(
+                        create_quality_representation_plot(pca_result), 
+                        use_container_width=True
+                    )
+                    
+                    st.markdown("""
+                    **💡 Analyse de la qualité :**
+                    - **Cos2 > 0.5** : Bonne représentation
+                    - **Cos2 0.3-0.5** : Représentation acceptable
+                    - **Cos2 < 0.3** : Mauvaise représentation
+                    - Les individus mal représentés nécessitent une analyse complémentaire
+                    """)
+                
+                with tab6:
+                    # Suggestions de composantes optimales
+                    st.subheader("🎯 Suggestions du nombre optimal de composantes")
+                    suggestions_df = suggest_optimal_components(pca_result)
+                    st.dataframe(suggestions_df, use_container_width=True)
+                    
+                    # Rapport complet
+                    st.subheader("📄 Rapport d'analyse complet")
+                    report = generate_pca_report(pca_result)
+                    st.markdown(f"```\n{report}\n```")
+                    
+                    # Téléchargement du rapport
+                    st.download_button(
+                        label="📥 Télécharger le rapport PDF",
+                        data=report,
+                        file_name="rapport_pca.txt",
+                        mime="text/plain"
                     )
                 
-                # ==================== SECTION 4.2: SCREE PLOT ====================
-                st.markdown("---")
-                st.subheader("📊 Scree Plot - Analyse des valeurs propres")
+                # Visualisation 3D
+                if show_3d and pca_result['n_components'] >= 3:
+                    st.subheader("🌐 Visualisation 3D")
+                    st.plotly_chart(create_3d_pca_plot(pca_result), use_container_width=True)
                 
-                eigenvalues = pca_result['explained_variance']
-                explained_variance_ratio = pca_result['explained_variance_ratio']
-                cumulative_variance_ratio = pca_result['cumulative_variance_ratio']
-                
-                fig_scree = make_subplots(
-                    rows=1, cols=2,
-                    subplot_titles=("Variance expliquée par composante", "Variance cumulée"),
+                # Analyse des individus
+                st.subheader("🔍 Analyse détaillée d'un individu")
+                individual_idx = st.number_input(
+                    "Index de l'individu à analyser",
+                    min_value=0,
+                    max_value=len(pca_result['X_pca']) - 1,
+                    value=0
                 )
                 
-                # Plot 1: Variance par composante
-                fig_scree.add_trace(
-                    go.Bar(
-                        x=[f'PC{i+1}' for i in range(len(explained_variance_ratio))],
-                        y=explained_variance_ratio * 100,
-                        name='% Variance',
-                        marker_color='#1f77b4',
-                        opacity=0.7
-                    ),
-                    row=1, col=1
-                )
-                
-                # Plot 2: Variance cumulée
-                fig_scree.add_trace(
-                    go.Scatter(
-                        x=[f'PC{i+1}' for i in range(len(cumulative_variance_ratio))],
-                        y=cumulative_variance_ratio * 100,
-                        name='Variance cumulée',
-                        mode='lines+markers',
-                        line=dict(color='#ff7f0e', width=3),
-                        marker=dict(size=8)
-                    ),
-                    row=1, col=2
-                )
-                
-                # Seuil de variance
-                fig_scree.add_hline(
-                    y=variance_threshold * 100,
-                    line_dash="dash",
-                    line_color="red",
-                    annotation_text=f"Seuil {variance_threshold:.0%}",
-                    annotation_position="right",
-                    row=1, col=2
-                )
-                
-                fig_scree.update_layout(
-                    height=400,
-                    showlegend=True,
-                    title_text="Analyse dimensionnelle - Critères de décision"
-                )
-                
-                fig_scree.update_yaxes(title_text="% Variance", row=1, col=1)
-                fig_scree.update_yaxes(title_text="% Variance cumulée", row=1, col=2)
-                
-                st.plotly_chart(fig_scree, use_container_width=True)
-                
-                # ==================== SECTION 4.3: TABLEAU DES RÉSULTATS ====================
-                st.subheader("📋 Tableau synthétique des résultats")
-                
-                summary_data = {
-                    'Composante': [f'PC{i+1}' for i in range(n_components)],
-                    'Variance expliquée': [f'{v:.1%}' for v in explained_variance_ratio],
-                    'Variance cumulée': [f'{v:.1%}' for v in cumulative_variance_ratio],
-                    'Valeur propre': [f'{v:.3f}' for v in eigenvalues]
-                }
-                
-                summary_df = pd.DataFrame(summary_data)
-                st.dataframe(summary_df, use_container_width=True, hide_index=True)
-                
-                # ==================== SECTION 4.4: CERCLE DES CORRÉLATIONS ====================
-                if n_components >= 2:
-                    st.markdown("---")
-                    st.subheader("🎯 Cercle des Corrélations")
+                if st.button("Analyser cet individu"):
+                    analysis = get_individual_analysis(pca_result, individual_idx)
                     
-                    # Options d'affichage
                     col1, col2 = st.columns(2)
-                    
                     with col1:
-                        pc_x = st.selectbox(
-                            "Axe horizontal (X)",
-                            options=[f'PC{i+1}' for i in range(n_components)],
-                            index=0
-                        )
+                        st.metric("Qualité de représentation", f"{analysis['cos2']:.3f}")
+                        st.metric("Distance au centre", f"{analysis['distance_to_center']:.3f}")
                     
                     with col2:
-                        pc_y = st.selectbox(
-                            "Axe vertical (Y)",
-                            options=[f'PC{i+1}' for i in range(n_components)],
-                            index=1 if n_components > 1 else 0
-                        )
+                        st.write("**Coordonnées sur les axes :**")
+                        for i, coord in enumerate(analysis['coordinates']):
+                            st.write(f"PC{i+1}: {coord:.3f}")
                     
-                    # Extraction des indices
-                    x_idx = int(pc_x[2:]) - 1
-                    y_idx = int(pc_y[2:]) - 1
-                    
-                    # Création du cercle des corrélations
-                    loadings = pca_result['components']
-                    feature_names = user_features.columns.tolist()
-                    
-                    x_loadings = loadings[x_idx]
-                    y_loadings = loadings[y_idx]
-                    
-                    # Création du graphique
-                    fig_circle = go.Figure()
-                    
-                    # Cercle unité
-                    theta = np.linspace(0, 2*np.pi, 100)
-                    fig_circle.add_trace(go.Scatter(
-                        x=np.cos(theta),
-                        y=np.sin(theta),
-                        mode='lines',
-                        line=dict(color='gray', dash='dash'),
-                        name='Cercle unité',
-                        showlegend=False
-                    ))
-                    
-                    # Axes
-                    fig_circle.add_hline(y=0, line_color='gray', line_width=1)
-                    fig_circle.add_vline(x=0, line_color='gray', line_width=1)
-                    
-                    # Variables
-                    fig_circle.add_trace(go.Scatter(
-                        x=x_loadings,
-                        y=y_loadings,
-                        mode='markers+text',
-                        text=feature_names,
-                        textposition="top center",
-                        marker=dict(size=8, color='blue'),
-                        name='Variables',
-                        hovertemplate="<b>%{text}</b><br>X: %{x:.3f}<br>Y: %{y:.3f}<extra></extra>"
-                    ))
-                    
-                    # Vecteurs
-                    for i, feat in enumerate(feature_names):
-                        fig_circle.add_trace(go.Scatter(
-                            x=[0, x_loadings[i]],
-                            y=[0, y_loadings[i]],
-                            mode='lines',
-                            line=dict(color='rgba(0,0,255,0.3)', width=1),
-                            showlegend=False,
-                            hoverinfo='skip'
-                        ))
-                    
-                    fig_circle.update_layout(
-                        title=f"Cercle des corrélations - {pc_x} vs {pc_y}",
-                        xaxis_title=f"{pc_x} ({(explained_variance_ratio[x_idx]*100):.1f}%)",
-                        yaxis_title=f"{pc_y} ({(explained_variance_ratio[y_idx]*100):.1f}%)",
-                        height=600,
-                        xaxis=dict(range=[-1.2, 1.2]),
-                        yaxis=dict(range=[-1.2, 1.2]),
-                        showlegend=False
-                    )
-                    
-                    st.plotly_chart(fig_circle, use_container_width=True)
-                
-                # ==================== SECTION 4.5: CONCLUSIONS ====================
-                st.markdown("---")
-                st.markdown('<h2 class="sub-header">🎯 Conclusions et recommandations</h2>', unsafe_allow_html=True)
-                
-                with st.expander("📋 Synthèse des résultats", expanded=True):
-                    st.markdown(f"""
-                    ### 📊 Synthèse analytique
-                    
-                    **✅ Points forts de l'analyse :**
-                    1. **Variance bien capturée** : {cumulative_variance_ratio[-1]:.1%} avec {n_components} composantes
-                    2. **Compression réussie** : Réduction de {user_features.shape[1]} à {n_components} dimensions
-                    3. **Interprétabilité** : Les composantes principales sont faciles à interpréter
-                    
-                    **🎯 Principaux axes d'interprétation :**
-                    1. **PC1** ({explained_variance_ratio[0]:.1%}) : Premier axe de variance
-                    2. **PC2** ({explained_variance_ratio[1]:.1%}) : Deuxième axe orthogonal
-                    
-                    ### 📈 Recommandations pratiques
-                    
-                    **Pour la segmentation clients :**
-                    1. Utiliser PC1 et PC2 pour la visualisation 2D
-                    2. Regrouper les utilisateurs proches dans l'espace réduit
-                    3. Identifier les profils extrêmes aux coins du nuage
-                    
-                    **Pour la réduction dimensionnelle :**
-                    1. Conserver {min(n_components + 1, user_features.shape[1])} composantes pour >95% de variance
-                    2. Supprimer les features avec faible variance
-                    3. Valider avec une méthode de clustering (KMeans)
-                    
-                    **Prochaines étapes :**
-                    - Appliquer KMeans sur les scores PCA
-                    - Analyser les profils des clusters
-                    - Détecter les anomalies transactionnelles
-                    """)
+                    # Contributions aux axes
+                    st.write("**Contributions aux axes (%):**")
+                    for i, contrib in enumerate(analysis['contributions_to_axes']):
+                        st.progress(min(contrib/100, 1.0), text=f"PC{i+1}: {contrib:.1f}%")
                 
             except Exception as e:
                 st.error(f"❌ Erreur lors de l'analyse PCA: {str(e)}")
-                with st.expander("🔧 Détails techniques"):
-                    st.write(f"**Erreur :** {e}")
-                    st.write(f"**Shape des données :** {user_features.shape}")
-                    st.write(f"**Colonnes :** {user_features.columns.tolist()}")
-
+                st.info("""
+                **Solutions possibles :**
+                1. Vérifiez que vos données contiennent des colonnes numériques
+                2. Essayez de réduire le nombre de composantes
+                3. Vérifiez les types de données de vos colonnes
+                """)
     else:
-        # Mode attente
-        st.info("👆 **Cliquez sur le bouton ci-dessus pour lancer l'analyse PCA**")
-
+        st.info("👈 Cliquez sur le bouton ci-dessus pour lancer l'analyse PCA")
+        
+        # Aperçu des données
+        st.subheader("📋 Aperçu des données à analyser")
+        st.write(f"**Shape :** {user_features.shape}")
+        st.write(f"**Colonnes numériques :** {len(user_features.select_dtypes(include=[np.number]).columns)}")
+        
+        with st.expander("Voir les premières lignes"):
+            st.dataframe(user_features.head(), use_container_width=True)
+            
 def page_kmeans(user_features):
     """Page de segmentation KMeans."""
     st.markdown('<h1 class="main-header">👥 Segmentation des Utilisateurs</h1>', unsafe_allow_html=True)
