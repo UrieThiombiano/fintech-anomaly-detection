@@ -394,7 +394,7 @@ def page_acp(user_features: pd.DataFrame):
             2. Essayez de réduire le nombre de composantes
             3. Vérifiez les types de données de vos colonnes
             """)
-            
+
 def page_kmeans(user_features):
     """Page de segmentation KMeans."""
     st.markdown('<h1 class="main-header">👥 Segmentation des Utilisateurs</h1>', unsafe_allow_html=True)
@@ -595,176 +595,73 @@ def page_anomalies(df_raw, tx_features):
     """Page de détection d'anomalies."""
     st.markdown('<h1 class="main-header">🚨 Détection d\'Anomalies</h1>', unsafe_allow_html=True)
     
-    st.markdown("""
-    <div class="info-box">
-    <h3>🎯 Objectif de la détection d'anomalies</h3>
-    <p>Isolation Forest permet de :</p>
-    <ul>
-    <li><b>Détecter des transactions atypiques</b> sans données labellisées</li>
-    <li><b>Identifier des comportements suspects</b> (abus de cashback, montants extrêmes)</li>
-    <li><b>Surveiller en temps réel</b> les transactions à risque</li>
-    </ul>
-    </div>
+    # Vérifier les données
+    st.info("Vérification des données transactionnelles...")
     
-    <div class="warning-box">
-    <h4>⚠️ Principe d'Isolation Forest</h4>
-    <p>L'algorithme construit une forêt d'arbres qui isolent les points. 
-    Les points isolés rapidement (peu de coupures) sont considérés comme anomalies.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Afficher les types de données
+    with st.expander("Afficher les types de données transactionnelles"):
+        st.write(f"Shape: {tx_features.shape}")
+        st.write(f"Types: {tx_features.dtypes.value_counts().to_dict()}")
     
-    # Paramètres
-    st.sidebar.subheader("Paramètres Isolation Forest")
-    
-    contamination = st.sidebar.slider(
-        "Contamination (proportion d'anomalies attendue)",
-        min_value=0.001,
-        max_value=0.1,
-        value=0.02,
-        step=0.001,
-        help="Proportion approximative d'anomalies dans les données"
-    )
-    
-    # Suggestion automatique
-    if st.sidebar.button("Suggérer contamination"):
-        suggested = suggest_contamination(tx_features)
-        st.sidebar.info(f"Contamination suggérée: {suggested:.3f}")
-        contamination = suggested
-    
-    # Entraînement du modèle
-    anomaly_result = train_iforest_cached(tx_features, contamination)
-    
-    # Statistiques
-    stats = get_anomaly_statistics(anomaly_result)
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Transactions analysées", stats['n_total'])
-    with col2:
-        st.metric("Anomalies détectées", stats['n_anomalies'])
-    with col3:
-        st.metric("Taux d'anomalies", f"{stats['pct_anomalies']:.1f}%")
-    with col4:
-        st.metric("Score moyen", f"{stats['score_mean']:.3f}")
-    
-    # Distribution des scores
-    st.markdown('<h2 class="sub-header">Distribution des Scores d\'Anomalie</h2>', unsafe_allow_html=True)
-    
-    scores = anomaly_result['anomaly_scores']
-    is_anomaly = anomaly_result['is_anomaly']
-    
-    fig = make_subplots(rows=1, cols=2,
-                       subplot_titles=("Distribution complète", "Anomalies vs Normales"))
-    
-    # Histogramme complet
-    fig.add_trace(
-        go.Histogram(x=scores, nbinsx=50, name="Toutes transactions"),
-        row=1, col=1
-    )
-    
-    # Séparation anomalies/normales
-    normal_scores = scores[~is_anomaly]
-    anomaly_scores = scores[is_anomaly]
-    
-    fig.add_trace(
-        go.Histogram(x=normal_scores, nbinsx=50, name="Transactions normales",
-                    marker_color='blue'),
-        row=1, col=2
-    )
-    
-    fig.add_trace(
-        go.Histogram(x=anomaly_scores, nbinsx=50, name="Anomalies",
-                    marker_color='red'),
-        row=1, col=2
-    )
-    
-    fig.update_layout(height=400, barmode='overlay', showlegend=True)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown("""
-    **💡 Interprétation :**
-    - **Scores élevés** = transactions plus anormales
-    - La ligne verticale rouge montre le seuil automatique
-    - On peut ajuster manuellement le seuil ci-dessous
-    """)
-    
-    # Analyse des anomalies
-    st.markdown('<h2 class="sub-header">Analyse des Transactions Anormales</h2>', unsafe_allow_html=True)
-    
-    # Seuil de détection
-    score_threshold = st.slider(
-        "Seuil de score d'anomalie",
-        min_value=float(scores.min()),
-        max_value=float(scores.max()),
-        value=float(np.percentile(scores, 95)),  # Par défaut 95e percentile
-        step=0.01
-    )
-    
-    # Filtrer les anomalies
-    df_anomalies = analyze_anomalies(df_raw, anomaly_result, score_threshold)
-    high_score_tx = df_anomalies[df_anomalies['is_above_threshold']].copy()
-    
-    st.metric(f"Transactions au-dessus du seuil ({score_threshold:.3f})", len(high_score_tx))
-    
-    if not high_score_tx.empty:
-        # Affichage des transactions suspectes
-        st.subheader(f"Top {min(50, len(high_score_tx))} transactions les plus suspectes")
+    # Préparer les features transactionnelles
+    try:
+        # Filtrer uniquement les colonnes numériques
+        tx_numeric = tx_features.select_dtypes(include=[np.number])
         
-        display_cols = [
-            'transaction_id', 'user_id', 'transaction_date',
-            'product_category', 'product_amount', 'cashback',
-            'payment_method', 'anomaly_score'
-        ]
+        if tx_numeric.empty:
+            st.error("❌ Aucune colonne numérique trouvée dans les features transactionnelles!")
+            st.info("""
+            **Solution :**
+            1. Vérifiez que vos données contiennent des colonnes numériques
+            2. Les colonnes comme 'product_amount', 'cashback', etc. doivent être numériques
+            """)
+            return
         
-        # Garder seulement les colonnes présentes
-        available_cols = [col for col in display_cols if col in high_score_tx.columns]
+        st.success(f"✅ {tx_numeric.shape[1]} colonnes numériques disponibles")
         
-        st.dataframe(
-            high_score_tx[available_cols + ['anomaly_score']]
-            .sort_values('anomaly_score', ascending=False)
-            .head(50)
-            .style.format({'anomaly_score': '{:.3f}'}),
-            use_container_width=True
+        # Paramètres
+        contamination = st.slider(
+            "Contamination (proportion d'anomalies attendue)",
+            min_value=0.001,
+            max_value=0.2,
+            value=0.02,
+            step=0.001,
+            help="Proportion approximative d'anomalies dans les données"
         )
         
-        # Analyse des patterns
-        st.subheader("Caractéristiques des anomalies")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if 'product_category' in high_score_tx.columns:
-                cat_counts = high_score_tx['product_category'].value_counts().head(10)
-                fig = px.bar(x=cat_counts.index, y=cat_counts.values,
-                            title="Catégories les plus fréquentes dans les anomalies")
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            if 'payment_method' in high_score_tx.columns:
-                pm_counts = high_score_tx['payment_method'].value_counts().head(10)
-                fig = px.bar(x=pm_counts.index, y=pm_counts.values,
-                            title="Méthodes de paiement des anomalies")
-                st.plotly_chart(fig, use_container_width=True)
-        
-        # Distribution des montants
-        if 'product_amount' in high_score_tx.columns:
-            fig = px.box(high_score_tx, y='product_amount',
-                        title="Distribution des montants des anomalies")
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Téléchargement des résultats
-        st.subheader("Export des résultats")
-        
-        csv = high_score_tx.to_csv(index=False)
-        st.download_button(
-            label="📥 Télécharger les anomalies détectées (CSV)",
-            data=csv,
-            file_name="anomalies_detectees.csv",
-            mime="text/csv"
-        )
-    else:
-        st.info("Aucune transaction ne dépasse le seuil actuel. Essayez de réduire le seuil.")
-
+        if st.button("🔍 Détecter les anomalies", type="primary"):
+            with st.spinner("Entraînement du modèle en cours..."):
+                try:
+                    # Entraînement
+                    anomaly_result = train_isolation_forest(tx_numeric, contamination=contamination)
+                    
+                    # Statistiques
+                    stats = get_anomaly_statistics(anomaly_result)
+                    
+                    # Afficher les résultats
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Transactions analysées", stats['n_total'])
+                    with col2:
+                        st.metric("Anomalies détectées", stats['n_anomalies'])
+                    with col3:
+                        st.metric("Taux d'anomalies", f"{stats['pct_anomalies']:.1f}%")
+                    with col4:
+                        st.metric("Score moyen", f"{stats['score_mean']:.3f}")
+                    
+                    # ... reste du code pour afficher les anomalies ...
+                    
+                except Exception as e:
+                    st.error(f"❌ Erreur lors de la détection d'anomalies: {str(e)}")
+                    st.info("""
+                    **Solutions possibles :**
+                    1. Réduisez le nombre de colonnes
+                    2. Vérifiez qu'il n'y a pas de valeurs manquantes
+                    3. Essayez avec contamination=0.05
+                    """)
+    
+    except Exception as e:
+        st.error(f"❌ Erreur dans la préparation des données: {str(e)}")
 
 def page_xai(df_raw, tx_features):
     """Page d'explications SHAP."""

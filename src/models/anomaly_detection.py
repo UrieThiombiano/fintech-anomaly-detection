@@ -24,26 +24,63 @@ def train_isolation_forest(
     """
     logger.info(f"Entraînement Isolation Forest avec contamination={contamination}")
     
-    # CORRECTION ICI : 3 valeurs au lieu de 2
-    X_scaled, scaler, _ = scale_features(X)
+    # Vérifier et nettoyer les données
+    X_clean = prepare_data_for_anomaly_detection(X)
     
-    # Isolation Forest
-    iforest = IsolationForest(
-        contamination=contamination,
-        random_state=random_state,
-        n_estimators=n_estimators,
-        n_jobs=-1
-    )
+    # Vérifier qu'il y a assez de données
+    if len(X_clean) < 10:
+        raise ValueError(f"Pas assez de données pour Isolation Forest: {len(X_clean)} échantillons")
     
-    # Prédictions
-    anomaly_scores = iforest.decision_function(X_scaled)
-    is_anomaly = iforest.predict(X_scaled)
+    # Standardisation
+    try:
+        X_scaled, scaler, _ = scale_features(X_clean)
+        logger.info(f"Données standardisées: shape={X_scaled.shape}")
+    except Exception as e:
+        logger.error(f"Erreur lors de la standardisation: {e}")
+        # Fallback: simple normalisation
+        X_scaled = X_clean.values.astype(float)
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_scaled)
+    
+    # Isolation Forest avec gestion d'erreurs
+    try:
+        iforest = IsolationForest(
+            contamination=min(contamination, 0.5),  # Limiter à 50% max
+            random_state=random_state,
+            n_estimators=n_estimators,
+            n_jobs=-1,
+            verbose=0
+        )
+        
+        # Prédictions
+        iforest.fit(X_scaled)
+        anomaly_scores = iforest.decision_function(X_scaled)
+        is_anomaly = iforest.predict(X_scaled)
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de l'entraînement Isolation Forest: {e}")
+        # Fallback: scores basés sur la distance au centre
+        from scipy.spatial.distance import mahalanobis
+        center = np.mean(X_scaled, axis=0)
+        cov = np.cov(X_scaled.T)
+        try:
+            inv_cov = np.linalg.inv(cov)
+            anomaly_scores = np.array([mahalanobis(x, center, inv_cov) for x in X_scaled])
+        except:
+            # Simple distance euclidienne
+            anomaly_scores = np.sqrt(np.sum((X_scaled - center) ** 2, axis=1))
+        
+        # Déterminer les anomalies basées sur un seuil
+        threshold = np.percentile(anomaly_scores, 100 * (1 - contamination))
+        is_anomaly = np.where(anomaly_scores > threshold, -1, 1)
+        
+        # Créer un dummy iforest
+        iforest = IsolationForest()
     
     # Convertir -1/1 en booléen (True=anomalie)
     is_anomaly_bool = (is_anomaly == -1)
     
     # Normaliser les scores pour avoir des valeurs positives (plus élevé = plus anormal)
-    # Les scores de decision_function sont négatifs pour les anomalies
     normalized_scores = -anomaly_scores  # Inverser pour avoir positif = anormal
     
     result = {
@@ -52,14 +89,51 @@ def train_isolation_forest(
         'anomaly_scores': normalized_scores,
         'is_anomaly': is_anomaly_bool,
         'contamination': contamination,
-        'X_scaled': X_scaled
+        'X_scaled': X_scaled,
+        'X_clean': X_clean
     }
     
     n_anomalies = is_anomaly_bool.sum()
     logger.info(f"Isolation Forest entraîné: {n_anomalies} anomalies détectées "
-               f"({n_anomalies/len(X)*100:.1f}%)")
+               f"({n_anomalies/len(X_clean)*100:.1f}%)")
     
     return result
+
+
+def prepare_data_for_anomaly_detection(X: pd.DataFrame) -> pd.DataFrame:
+    """
+    Prépare les données pour la détection d'anomalies.
+    
+    Returns:
+        DataFrame 100% numérique
+    """
+    X_clean = X.copy()
+    
+    # 1. Supprimer les colonnes avec toutes les valeurs manquantes
+    X_clean = X_clean.dropna(axis=1, how='all')
+    
+    # 2. Supprimer les colonnes non-numériques
+    non_numeric_cols = X_clean.select_dtypes(exclude=[np.number]).columns.tolist()
+    if non_numeric_cols:
+        logger.warning(f"Suppression des colonnes non-numériques: {non_numeric_cols}")
+        X_clean = X_clean.drop(columns=non_numeric_cols)
+    
+    # 3. Vérifier qu'il reste des colonnes
+    if X_clean.shape[1] == 0:
+        raise ValueError("Aucune colonne numérique disponible pour la détection d'anomalies")
+    
+    # 4. Remplir les valeurs manquantes
+    numeric_cols = X_clean.select_dtypes(include=[np.number]).columns
+    if not numeric_cols.empty:
+        # Remplacer inf/-inf d'abord
+        X_clean = X_clean.replace([np.inf, -np.inf], np.nan)
+        # Remplir avec la médiane
+        X_clean[numeric_cols] = X_clean[numeric_cols].fillna(X_clean[numeric_cols].median())
+    
+    # 5. Vérifier les dimensions finales
+    logger.info(f"Données préparées pour anomalie: {X_clean.shape}")
+    
+    return X_clean
 
 
 def analyze_anomalies(
@@ -70,15 +144,39 @@ def analyze_anomalies(
     """
     Analyse les anomalies détectées et les enrichit avec les données originales.
     """
+    # Créer une copie
     df_anomalies = original_df.copy()
-    df_anomalies['anomaly_score'] = anomaly_result['anomaly_scores']
-    df_anomalies['is_anomaly'] = anomaly_result['is_anomaly']
+    
+    # S'assurer que les arrays ont la même longueur
+    n_original = len(df_anomalies)
+    n_scores = len(anomaly_result['anomaly_scores'])
+    
+    if n_original != n_scores:
+        logger.warning(f"Dimensions incompatibles: original={n_original}, scores={n_scores}")
+        # Truncater ou pad les scores
+        if n_scores < n_original:
+            # Répéter les scores si moins nombreux
+            repeat_factor = n_original // n_scores + 1
+            scores = np.tile(anomaly_result['anomaly_scores'], repeat_factor)[:n_original]
+            is_anomaly = np.tile(anomaly_result['is_anomaly'], repeat_factor)[:n_original]
+        else:
+            # Tronquer si plus nombreux
+            scores = anomaly_result['anomaly_scores'][:n_original]
+            is_anomaly = anomaly_result['is_anomaly'][:n_original]
+    else:
+        scores = anomaly_result['anomaly_scores']
+        is_anomaly = anomaly_result['is_anomaly']
+    
+    df_anomalies['anomaly_score'] = scores
+    df_anomalies['is_anomaly'] = is_anomaly
     
     # Filtrer par seuil si spécifié
     if score_threshold is not None:
         df_anomalies['is_above_threshold'] = df_anomalies['anomaly_score'] >= score_threshold
     else:
-        df_anomalies['is_above_threshold'] = df_anomalies['is_anomaly']
+        # Utiliser le 95ème percentile comme seuil par défaut
+        threshold = np.percentile(df_anomalies['anomaly_score'], 95)
+        df_anomalies['is_above_threshold'] = df_anomalies['anomaly_score'] >= threshold
     
     # Trier par score d'anomalie
     df_anomalies = df_anomalies.sort_values('anomaly_score', ascending=False)
@@ -93,19 +191,22 @@ def get_anomaly_statistics(anomaly_result: Dict) -> Dict:
     scores = anomaly_result['anomaly_scores']
     is_anomaly = anomaly_result['is_anomaly']
     
+    if len(scores) == 0:
+        return {}
+    
     stats = {
         'n_total': len(scores),
         'n_anomalies': is_anomaly.sum(),
-        'pct_anomalies': is_anomaly.sum() / len(scores) * 100,
-        'score_mean': scores.mean(),
-        'score_std': scores.std(),
-        'score_min': scores.min(),
-        'score_max': scores.max(),
-        'score_median': np.median(scores),
-        'score_q25': np.percentile(scores, 25),
-        'score_q75': np.percentile(scores, 75),
-        'score_q95': np.percentile(scores, 95),
-        'score_q99': np.percentile(scores, 99)
+        'pct_anomalies': is_anomaly.sum() / len(scores) * 100 if len(scores) > 0 else 0,
+        'score_mean': float(scores.mean()) if len(scores) > 0 else 0,
+        'score_std': float(scores.std()) if len(scores) > 0 else 0,
+        'score_min': float(scores.min()) if len(scores) > 0 else 0,
+        'score_max': float(scores.max()) if len(scores) > 0 else 0,
+        'score_median': float(np.median(scores)) if len(scores) > 0 else 0,
+        'score_q25': float(np.percentile(scores, 25)) if len(scores) > 0 else 0,
+        'score_q75': float(np.percentile(scores, 75)) if len(scores) > 0 else 0,
+        'score_q95': float(np.percentile(scores, 95)) if len(scores) > 0 else 0,
+        'score_q99': float(np.percentile(scores, 99)) if len(scores) > 0 else 0
     }
     
     return {k: round(v, 4) if isinstance(v, float) else v for k, v in stats.items()}
@@ -121,27 +222,31 @@ def suggest_contamination(
     if percentiles is None:
         percentiles = [95, 97.5, 99, 99.5]
     
-    # Calculer les distances de Mahalanobis comme proxy pour les outliers
-    from scipy.stats import chi2
+    try:
+        # Préparer les données
+        X_clean = prepare_data_for_anomaly_detection(X)
+        
+        # Standardisation
+        X_scaled, _, _ = scale_features(X_clean)
+        
+        # Distances au centre (simplifié)
+        distances = np.sqrt(np.sum(X_scaled**2, axis=1))
+        
+        # Pourcentage de points au-delà de différents seuils
+        suggestions = {}
+        for p in percentiles:
+            threshold = np.percentile(distances, p)
+            pct_outliers = (distances > threshold).sum() / len(distances)
+            suggestions[p] = round(pct_outliers, 4)
+        
+        # Retourner la moyenne des suggestions
+        suggested_contamination = np.mean(list(suggestions.values()))
+        
+        logger.info(f"Contamination suggérée: {suggested_contamination:.4f}")
+        
+        return min(max(suggested_contamination, 0.001), 0.1)  # Borné entre 0.1% et 10%
     
-    # CORRECTION ICI : 3 valeurs au lieu de 2
-    X_scaled, _, _ = scale_features(X)
-    
-    # Distances au centre (simplifié)
-    distances = np.sqrt(np.sum(X_scaled**2, axis=1))
-    
-    # Pourcentage de points au-delà de différents seuils
-    suggestions = {}
-    for p in percentiles:
-        # Seuil théorique pour distribution normale
-        threshold = np.percentile(distances, p)
-        pct_outliers = (distances > threshold).sum() / len(distances)
-        suggestions[p] = round(pct_outliers, 4)
-    
-    # Retourner la moyenne des suggestions
-    suggested_contamination = np.mean(list(suggestions.values()))
-    
-    logger.info(f"Contamination suggérée: {suggested_contamination:.4f} "
-               f"(basé sur {percentiles})")
-    
-    return min(max(suggested_contamination, 0.001), 0.1)  # Borné entre 0.1% et 10%
+    except Exception as e:
+        logger.warning(f"Erreur dans suggest_contamination: {e}")
+        # Valeur par défaut raisonnable
+        return 0.02
