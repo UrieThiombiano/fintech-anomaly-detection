@@ -1711,3 +1711,108 @@ def get_pca_dashboard_data(pca_result: Dict) -> Dict:
             for i in range(min(3, pca_result['n_components']))
         }
     }
+
+class PCAAnalyzer:
+    """Classe complète pour l'analyse PCA avec visualisations avancées."""
+    
+    def __init__(self, random_state: int = 42):
+        self.random_state = random_state
+        self.pca_result = None
+        self.scaler = None
+        self.pca = None
+    
+    def fit(self, X: pd.DataFrame, n_components: Optional[int] = None, 
+            variance_threshold: float = 0.9) -> Dict:
+        """
+        Effectue une PCA complète avec analyse des résultats.
+        """
+        logger.info(f"Analyse PCA sur données de shape {X.shape}")
+        
+        # 1. Préparation des données
+        X_clean = self._prepare_data(X)
+        
+        # 2. Standardisation avec fallback
+        X_scaled, self.scaler, feature_names = self._safe_scale_features(X_clean)
+        
+        # VÉRIFICATION CRITIQUE
+        if X_scaled is None or X_scaled.shape[1] == 0:
+            raise ValueError("❌ Données invalides après standardisation")
+        
+        # 3. Détermination du nombre optimal de composantes
+        if n_components is None:
+            n_components = self._determine_optimal_components(
+                X_scaled, variance_threshold
+            )
+        
+        # 4. Calcul de la PCA
+        try:
+            self.pca = PCA(n_components=n_components, random_state=self.random_state)
+            X_pca = self.pca.fit_transform(X_scaled)
+        except Exception as e:
+            logger.error(f"Erreur dans PCA.fit_transform: {e}")
+            raise ValueError(f"Impossible de calculer la PCA: {e}")
+        
+        # 5. Calcul des métriques avancées
+        metrics = self._compute_advanced_metrics(X_scaled, X_pca)
+        
+        # 6. Stockage des résultats
+        self.pca_result = {
+            'scaler': self.scaler,
+            'pca': self.pca,
+            'X_pca': X_pca,
+            'X_scaled': X_scaled,
+            'X_clean': X_clean,
+            'feature_names': feature_names,
+            'n_components': n_components,
+            'explained_variance_ratio': self.pca.explained_variance_ratio_,
+            'cumulative_variance': np.cumsum(self.pca.explained_variance_ratio_),
+            'loadings': self.pca.components_.T * np.sqrt(self.pca.explained_variance_),
+            'metrics': metrics,
+            'individual_contributions': self._compute_individual_contributions(X_scaled),
+            'quality_representation': self._compute_quality_metrics(X_scaled, X_pca)
+        }
+        
+        logger.info(f"PCA terminée: {n_components} composantes, "
+                   f"variance totale expliquée: {self.pca_result['cumulative_variance'][-1]:.3f}")
+        
+        return self.pca_result
+    
+    def _safe_scale_features(self, X: pd.DataFrame) -> Tuple[np.ndarray, StandardScaler, List[str]]:
+        """Standardisation des features avec gestion d'erreurs."""
+        try:
+            from src.utils import scale_features
+            X_scaled, scaler, feature_names = scale_features(X)
+            
+            # Vérifications
+            if X_scaled is None:
+                logger.warning("scale_features() a retourné None, utilisation de fallback")
+                return self._fallback_scale_features(X)
+            
+            if not isinstance(X_scaled, np.ndarray):
+                X_scaled = np.array(X_scaled)
+            
+            return X_scaled, scaler, feature_names
+            
+        except Exception as e:
+            logger.error(f"Erreur dans scale_features: {e}, utilisation de fallback")
+            return self._fallback_scale_features(X)
+    
+    def _fallback_scale_features(self, X: pd.DataFrame) -> Tuple[np.ndarray, StandardScaler, List[str]]:
+        """Fallback pour la standardisation."""
+        from sklearn.preprocessing import StandardScaler
+        
+        # Sélection des colonnes numériques
+        numeric_cols = X.select_dtypes(include=[np.number]).columns
+        
+        if len(numeric_cols) == 0:
+            # Si aucune colonne numérique, utiliser toutes
+            numeric_cols = X.columns
+            X_numeric = X.values.astype(float)
+        else:
+            X_numeric = X[numeric_cols].values
+        
+        # Standardisation
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_numeric)
+        
+        return X_scaled, scaler, list(numeric_cols)
