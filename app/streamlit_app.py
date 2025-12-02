@@ -304,24 +304,12 @@ def page_eda(df_raw, user_features, tx_features):
 
 def page_acp(user_features: pd.DataFrame):
     """Page d'analyse PCA améliorée."""
+    import streamlit as st
+    
     st.markdown('<h1 class="main-header">📊 Analyse en Composantes Principales Avancée</h1>', unsafe_allow_html=True)
     
-    # Introduction pédagogique
-    st.markdown("""
-    <div class="info-box">
-    <h3>🎯 Qu'est-ce que l'ACP ?</h3>
-    <p>L'Analyse en Composantes Principales est une méthode de réduction de dimensionnalité qui :</p>
-    <ul>
-    <li><b>Réduit le nombre de variables</b> tout en conservant l'information maximale</li>
-    <li><b>Identifie les patterns</b> cachés dans les données</li>
-    <li><b>Visualise les relations</b> entre variables et individus</li>
-    <li><b>Détecte les outliers</b> et les observations atypiques</li>
-    </ul>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Paramètres avancés
-    with st.sidebar.expander("⚙️ Paramètres avancés PCA", expanded=False):
+    # Paramètres
+    with st.sidebar.expander("⚙️ Paramètres PCA", expanded=False):
         n_components = st.slider(
             "Nombre de composantes",
             min_value=2,
@@ -338,22 +326,19 @@ def page_acp(user_features: pd.DataFrame):
             step=0.05,
             help="Variance minimale à conserver si choix automatique"
         )
-        
-        show_3d = st.checkbox("Afficher la visualisation 3D", value=True)
-        show_biplot = st.checkbox("Afficher le biplot", value=True)
     
     # Bouton de calcul
-    if st.button("🚀 Lancer l'analyse PCA avancée", type="primary", use_container_width=True):
+    if st.button("🚀 Lancer l'analyse PCA", type="primary", use_container_width=True):
         with st.spinner("Analyse PCA en cours..."):
             try:
-                # Calcul PCA avancée
+                # Calcul PCA
                 pca_result = compute_pca(
                     user_features, 
                     n_components=n_components,
                     variance_threshold=variance_threshold
                 )
                 
-                # Dashboard de métriques
+                # Métriques
                 st.markdown("### 📈 Métriques principales")
                 col1, col2, col3, col4 = st.columns(4)
                 
@@ -372,159 +357,41 @@ def page_acp(user_features: pd.DataFrame):
                 with col4:
                     st.metric("Composantes retenues", pca_result['n_components'])
                 
-                # Onglets pour les différentes visualisations
-                tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-                    "📊 Scree Plot", 
-                    "🔵 Cercle des corrélations", 
-                    "🎯 Biplot",
-                    "🔥 Heatmap",
-                    "📈 Qualité",
-                    "📄 Rapport"
-                ])
+                # Visualisations
+                tab1, tab2 = st.tabs(["📊 Scree Plot", "🔵 Cercle des corrélations"])
                 
                 with tab1:
-                    st.plotly_chart(create_scree_plot(pca_result), use_container_width=True)
-                    
-                    st.markdown("""
-                    **💡 Interprétation du Scree Plot :**
-                    - **Barres bleues** : Valeurs propres de chaque composante
-                    - **Ligne rouge** : Critère de Kaiser (valeur propre > 1)
-                    - **Courbe rouge** : Variance cumulée expliquée
-                    - **Point d'inflexion** : Où la courbe s'aplatit = nombre optimal de composantes
-                    """)
+                    fig1 = create_scree_plot(pca_result)
+                    st.plotly_chart(fig1, use_container_width=True)
                 
                 with tab2:
-                    pc_x = st.selectbox("Composante X", range(pca_result['n_components']), 0)
-                    pc_y = st.selectbox("Composante Y", range(pca_result['n_components']), 1, 
-                                      disabled=pc_x)
-                    
-                    st.plotly_chart(
-                        create_correlation_circle(pca_result, pc_x, pc_y), 
-                        use_container_width=True
-                    )
-                    
-                    st.markdown("""
-                    **💡 Interprétation du cercle des corrélations :**
-                    - **Position des points** : Corrélation avec les axes
-                    - **Taille des points** : Qualité de représentation (cos2)
-                    - **Couleur** : Qualité globale
-                    - **Proximité** : Variables corrélées positivement
-                    - **Opposition** : Variables corrélées négativement
-                    """)
-                
-                with tab3:
-                    if show_biplot and pca_result['n_components'] >= 2:
-                        st.plotly_chart(
-                            create_biplot(pca_result), 
-                            use_container_width=True
-                        )
+                    if pca_result['n_components'] >= 2:
+                        pc_x = st.selectbox("Composante X", range(pca_result['n_components']), 0, key="corr_x")
+                        pc_y = st.selectbox("Composante Y", range(pca_result['n_components']), 1, 
+                                          key="corr_y", disabled=(pc_x == 1))
                         
-                        st.markdown("""
-                        **💡 Interprétation du Biplot :**
-                        - **Points bleus** : Individus dans l'espace réduit
-                        - **Vecteurs rouges** : Variables (direction et importance)
-                        - **Projections** : Individus proches ont des profils similaires
-                        - **Angles** : Relations entre variables
-                        """)
+                        fig2 = create_correlation_circle(pca_result, pc_x, pc_y)
+                        st.plotly_chart(fig2, use_container_width=True)
+                    else:
+                        st.warning("Au moins 2 composantes sont nécessaires pour le cercle des corrélations")
                 
-                with tab4:
-                    st.plotly_chart(
-                        create_heatmap_correlations(pca_result), 
-                        use_container_width=True
-                    )
-                    
-                    st.markdown("""
-                    **💡 Interprétation de la Heatmap :**
-                    - **Bleu** : Corrélation positive forte
-                    - **Rouge** : Corrélation négative forte
-                    - **Blanc** : Faible corrélation
-                    - Permet d'identifier rapidement les variables importantes pour chaque axe
-                    """)
-                
-                with tab5:
-                    st.plotly_chart(
-                        create_quality_representation_plot(pca_result), 
-                        use_container_width=True
-                    )
-                    
-                    st.markdown("""
-                    **💡 Analyse de la qualité :**
-                    - **Cos2 > 0.5** : Bonne représentation
-                    - **Cos2 0.3-0.5** : Représentation acceptable
-                    - **Cos2 < 0.3** : Mauvaise représentation
-                    - Les individus mal représentés nécessitent une analyse complémentaire
-                    """)
-                
-                with tab6:
-                    # Suggestions de composantes optimales
-                    st.subheader("🎯 Suggestions du nombre optimal de composantes")
-                    suggestions_df = suggest_optimal_components(pca_result)
-                    st.dataframe(suggestions_df, use_container_width=True)
-                    
-                    # Rapport complet
-                    st.subheader("📄 Rapport d'analyse complet")
+                # Rapport
+                with st.expander("📄 Voir le rapport complet"):
                     report = generate_pca_report(pca_result)
-                    st.markdown(f"```\n{report}\n```")
-                    
-                    # Téléchargement du rapport
-                    st.download_button(
-                        label="📥 Télécharger le rapport PDF",
-                        data=report,
-                        file_name="rapport_pca.txt",
-                        mime="text/plain"
-                    )
+                    st.code(report)
                 
-                # Visualisation 3D
-                if show_3d and pca_result['n_components'] >= 3:
-                    st.subheader("🌐 Visualisation 3D")
-                    st.plotly_chart(create_3d_pca_plot(pca_result), use_container_width=True)
-                
-                # Analyse des individus
-                st.subheader("🔍 Analyse détaillée d'un individu")
-                individual_idx = st.number_input(
-                    "Index de l'individu à analyser",
-                    min_value=0,
-                    max_value=len(pca_result['X_pca']) - 1,
-                    value=0
-                )
-                
-                if st.button("Analyser cet individu"):
-                    analysis = get_individual_analysis(pca_result, individual_idx)
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Qualité de représentation", f"{analysis['cos2']:.3f}")
-                        st.metric("Distance au centre", f"{analysis['distance_to_center']:.3f}")
-                    
-                    with col2:
-                        st.write("**Coordonnées sur les axes :**")
-                        for i, coord in enumerate(analysis['coordinates']):
-                            st.write(f"PC{i+1}: {coord:.3f}")
-                    
-                    # Contributions aux axes
-                    st.write("**Contributions aux axes (%):**")
-                    for i, contrib in enumerate(analysis['contributions_to_axes']):
-                        st.progress(min(contrib/100, 1.0), text=f"PC{i+1}: {contrib:.1f}%")
+                # Top loadings
+                with st.expander("🔍 Voir les variables importantes"):
+                    for i in range(min(3, pca_result['n_components'])):
+                        st.subheader(f"Top variables pour PC{i+1}")
+                        top_vars = get_top_loadings(pca_result, i, 10)
+                        st.dataframe(top_vars, use_container_width=True)
                 
             except Exception as e:
                 st.error(f"❌ Erreur lors de l'analyse PCA: {str(e)}")
-                st.info("""
-                **Solutions possibles :**
-                1. Vérifiez que vos données contiennent des colonnes numériques
-                2. Essayez de réduire le nombre de composantes
-                3. Vérifiez les types de données de vos colonnes
-                """)
+                st.info("Vérifiez que vos données contiennent des colonnes numériques et qu'elles ne sont pas toutes constantes.")
     else:
-        st.info("👈 Cliquez sur le bouton ci-dessus pour lancer l'analyse PCA")
-        
-        # Aperçu des données
-        st.subheader("📋 Aperçu des données à analyser")
-        st.write(f"**Shape :** {user_features.shape}")
-        st.write(f"**Colonnes numériques :** {len(user_features.select_dtypes(include=[np.number]).columns)}")
-        
-        with st.expander("Voir les premières lignes"):
-            st.dataframe(user_features.head(), use_container_width=True)
-            
+        st.info("👈 Cliquez sur le bouton ci-dessus pour lancer l'analyse PCA")          
 def page_kmeans(user_features):
     """Page de segmentation KMeans."""
     st.markdown('<h1 class="main-header">👥 Segmentation des Utilisateurs</h1>', unsafe_allow_html=True)

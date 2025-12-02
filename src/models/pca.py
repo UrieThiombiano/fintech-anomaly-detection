@@ -1,6 +1,6 @@
 """
 Analyse en Composantes Principales (PCA) - Version Pro avec visualisations avancées
-Version corrigée et robuste avec TOUTES les fonctions de visualisation
+Version COMPLÈTE corrigée et robuste
 """
 import pandas as pd
 import numpy as np
@@ -20,9 +20,6 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# CLASSE PRINCIPALE PCA
-# ============================================================================
 
 class PCAAnalyzer:
     """Classe complète pour l'analyse PCA avec visualisations avancées."""
@@ -118,7 +115,370 @@ class PCAAnalyzer:
             logger.error(f"❌ Erreur dans l'analyse PCA: {e}", exc_info=True)
             raise
     
-    # ... (toutes les méthodes de la classe restent identiques) ...
+    def _prepare_data(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Prépare les données pour l'analyse PCA de manière robuste."""
+        logger.info("Préparation des données...")
+        
+        if X is None or X.empty:
+            raise ValueError("❌ Données d'entrée vides")
+        
+        X_clean = X.copy()
+        
+        # Vérifier et convertir les colonnes non-numériques
+        non_numeric_cols = X_clean.select_dtypes(exclude=[np.number]).columns
+        
+        if len(non_numeric_cols) > 0:
+            logger.info(f"Conversion de {len(non_numeric_cols)} colonnes non-numériques...")
+            for col in non_numeric_cols:
+                try:
+                    # Essayer de convertir en numérique
+                    X_clean[col] = pd.to_numeric(X_clean[col], errors='coerce')
+                except:
+                    # Si échec, encoder catégoriel
+                    X_clean[col] = pd.factorize(X_clean[col])[0]
+        
+        # Supprimer les colonnes avec variance nulle ou presque nulle
+        variance = X_clean.var()
+        zero_variance_cols = variance[variance < 1e-10].index.tolist()
+        
+        if zero_variance_cols:
+            logger.warning(f"Suppression des colonnes à variance nulle: {zero_variance_cols}")
+            X_clean = X_clean.drop(columns=zero_variance_cols)
+        
+        # Traiter les valeurs manquantes
+        if X_clean.isna().any().any():
+            logger.info("Traitement des valeurs manquantes...")
+            imputer = SimpleImputer(strategy='median')
+            X_clean_imputed = imputer.fit_transform(X_clean)
+            X_clean = pd.DataFrame(X_clean_imputed, columns=X_clean.columns, index=X_clean.index)
+        
+        # Vérification finale
+        if X_clean.shape[1] < 2:
+            raise ValueError(f"❌ Pas assez de colonnes numériques ({X_clean.shape[1]}) pour PCA")
+        
+        logger.info(f"✅ Données préparées: {X_clean.shape}")
+        return X_clean
+    
+    def _safe_scale_features(self, X: pd.DataFrame) -> Tuple[np.ndarray, StandardScaler, List[str]]:
+        """Standardisation robuste avec gestion d'erreurs."""
+        logger.info("Standardisation des features...")
+        
+        try:
+            # Sélectionner uniquement les colonnes numériques
+            numeric_cols = X.select_dtypes(include=[np.number]).columns
+            
+            if len(numeric_cols) == 0:
+                logger.error("❌ Aucune colonne numérique trouvée")
+                # Essayer de convertir toutes les colonnes
+                X_numeric = X.astype(float).values
+                feature_names = X.columns.tolist()
+            else:
+                X_numeric = X[numeric_cols].values
+                feature_names = numeric_cols.tolist()
+            
+            # Vérifier les dimensions
+            if X_numeric.shape[1] == 0:
+                raise ValueError("❌ Aucune dimension numérique")
+            
+            # Standardisation
+            self.scaler = StandardScaler()
+            X_scaled = self.scaler.fit_transform(X_numeric)
+            
+            # Vérification finale
+            if X_scaled is None:
+                raise ValueError("❌ X_scaled est None après scaling")
+            
+            logger.info(f"✅ Standardisation réussie: {X_scaled.shape}")
+            return X_scaled, self.scaler, feature_names
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur dans la standardisation: {e}")
+            # Fallback: scaling manuel simple
+            logger.warning("⚠ Utilisation du fallback de standardisation")
+            
+            numeric_cols = X.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) == 0:
+                numeric_cols = X.columns
+                X_numeric = X.values.astype(float)
+            else:
+                X_numeric = X[numeric_cols].values
+            
+            # Scaling manuel (centre-réduit)
+            means = np.mean(X_numeric, axis=0)
+            stds = np.std(X_numeric, axis=0)
+            stds[stds == 0] = 1.0  # Éviter la division par zéro
+            
+            X_scaled = (X_numeric - means) / stds
+            
+            # Créer un scaler factice
+            self.scaler = StandardScaler()
+            self.scaler.mean_ = means
+            self.scaler.scale_ = stds
+            
+            return X_scaled, self.scaler, list(numeric_cols)
+    
+    def _determine_optimal_components(self, X_scaled: np.ndarray, 
+                                    variance_threshold: float = 0.9) -> int:
+        """Détermine le nombre optimal de composantes de manière robuste."""
+        try:
+            n_features = X_scaled.shape[1]
+            
+            # Méthode 1: Variance cumulée
+            pca_temp = PCA(random_state=self.random_state)
+            pca_temp.fit(X_scaled)
+            cumsum = np.cumsum(pca_temp.explained_variance_ratio_)
+            
+            n_by_variance = np.argmax(cumsum >= variance_threshold) + 1
+            if n_by_variance == 0:  # Si aucune composante n'atteint le seuil
+                n_by_variance = min(2, n_features)
+            
+            # Méthode 2: Kaiser criterion (eigenvalue > 1)
+            eigenvalues = pca_temp.explained_variance_
+            n_by_kaiser = np.sum(eigenvalues > 1)
+            
+            # Méthode 3: Broken stick
+            n_by_broken_stick = self._broken_stick_criterion(eigenvalues)
+            
+            # Choisir le maximum raisonnable
+            suggestions = [n_by_variance, n_by_kaiser, n_by_broken_stick]
+            valid_suggestions = [s for s in suggestions if 2 <= s <= n_features]
+            
+            if valid_suggestions:
+                n_components = max(valid_suggestions)
+            else:
+                n_components = min(2, n_features)
+            
+            # S'assurer que c'est au moins 2 pour la visualisation
+            n_components = max(2, min(n_components, n_features))
+            
+            logger.info(f"Suggestions: Variance={n_by_variance}, Kaiser={n_by_kaiser}, "
+                       f"Broken Stick={n_by_broken_stick} → Choix={n_components}")
+            
+            return n_components
+            
+        except Exception as e:
+            logger.error(f"Erreur dans la détermination des composantes: {e}")
+            # Fallback: 2 composantes pour la visualisation
+            return min(2, X_scaled.shape[1])
+    
+    def _broken_stick_criterion(self, eigenvalues: np.ndarray) -> int:
+        """Critère du bâton brisé pour déterminer les composantes significatives."""
+        try:
+            p = len(eigenvalues)
+            if p == 0:
+                return 2
+            
+            # Calculer les valeurs du bâton brisé
+            broken_stick = np.zeros(p)
+            for i in range(1, p + 1):
+                broken_stick[i-1] = sum(1/j for j in range(i, p + 1)) / p
+            
+            # Comparer les variances expliquées
+            explained_var = eigenvalues / eigenvalues.sum()
+            n_significant = np.sum(explained_var > broken_stick)
+            
+            return max(2, n_significant)
+        except:
+            return 2
+    
+    def _compute_advanced_metrics(self, X_scaled: np.ndarray, X_pca: np.ndarray) -> Dict:
+        """Calcule des métriques avancées pour l'analyse PCA de manière robuste."""
+        try:
+            n_samples, n_features = X_scaled.shape
+            n_components = X_pca.shape[1]
+            
+            # Cos2 - qualité de représentation des individus
+            try:
+                sum_squared_X = np.sum(X_scaled**2, axis=1)
+                sum_squared_X[sum_squared_X == 0] = 1  # Éviter division par zéro
+                cos2 = np.sum(X_pca**2, axis=1) / sum_squared_X
+                cos2 = np.clip(cos2, 0, 1)  # S'assurer que c'est entre 0 et 1
+            except:
+                cos2 = np.ones(n_samples) * 0.5
+            
+            # Contributions des individus aux axes
+            try:
+                sum_X_pca_squared = np.sum(X_pca**2, axis=0)
+                sum_X_pca_squared[sum_X_pca_squared == 0] = 1  # Éviter division par zéro
+                contributions = (X_pca**2) / sum_X_pca_squared * 100
+            except:
+                contributions = np.ones((n_samples, n_components)) * (100 / n_components)
+            
+            # Qualité de représentation des variables (cos2)
+            try:
+                loadings = self.pca.components_.T * np.sqrt(self.pca.explained_variance_)
+                var_cos2 = np.sum(loadings**2, axis=1)
+            except:
+                var_cos2 = np.ones(n_features) * 0.5
+            
+            # Variances expliquées par composante
+            try:
+                explained_var = self.pca.explained_variance_ratio_ * 100
+            except:
+                explained_var = np.ones(n_components) * (100 / n_components)
+            
+            # Autres métriques
+            metrics = {
+                'cos2_individuals': cos2,
+                'individual_contributions': contributions,
+                'variable_cos2': var_cos2,
+                'explained_variance_pct': explained_var,
+                'eigenvalues': self.pca.explained_variance_,
+                'inertia': np.sum(X_scaled**2) if n_samples > 0 else 0,
+                'bartlett_sphericity': self._bartlett_test(X_scaled),
+                'kmo_measure': self._kmo_test(X_scaled),
+                'total_variance': np.sum(self.pca.explained_variance_) if hasattr(self.pca, 'explained_variance_') else 0,
+                'mean_cos2': np.mean(cos2) if len(cos2) > 0 else 0
+            }
+            
+            return metrics
+            
+        except Exception as e:
+            logger.error(f"Erreur dans le calcul des métriques avancées: {e}")
+            # Retourner des métriques par défaut
+            return {
+                'cos2_individuals': np.ones(X_pca.shape[0]) * 0.5,
+                'individual_contributions': np.ones((X_pca.shape[0], X_pca.shape[1])) * (100 / X_pca.shape[1]),
+                'variable_cos2': np.ones(X_scaled.shape[1]) * 0.5,
+                'explained_variance_pct': np.ones(X_pca.shape[1]) * (100 / X_pca.shape[1]),
+                'eigenvalues': np.ones(X_pca.shape[1]),
+                'inertia': 0,
+                'bartlett_sphericity': {'error': 'Calcul impossible'},
+                'kmo_measure': {'error': 'Calcul impossible'},
+                'total_variance': 0,
+                'mean_cos2': 0.5
+            }
+    
+    def _bartlett_test(self, X_scaled: np.ndarray) -> Dict:
+        """Test de sphéricité de Bartlett."""
+        try:
+            n, p = X_scaled.shape
+            if n < 2 or p < 2:
+                return {'error': 'Dimensions insuffisantes'}
+            
+            corr_matrix = np.corrcoef(X_scaled.T)
+            det = np.linalg.det(corr_matrix)
+            
+            # Éviter les problèmes numériques
+            if det <= 0:
+                return {'error': 'Déterminant non positif'}
+            
+            chi2_val = -((n - 1) - (2*p + 5)/6) * np.log(det)
+            df = p*(p-1)/2
+            
+            # Calcul de la p-value
+            if chi2_val > 0 and df > 0:
+                from scipy.stats import chi2
+                p_value = 1 - chi2.cdf(chi2_val, df)
+            else:
+                p_value = 1.0
+            
+            return {
+                'chi_square': float(chi2_val),
+                'df': int(df),
+                'p_value': float(p_value),
+                'significant': p_value < 0.05
+            }
+        except Exception as e:
+            logger.error(f"Erreur dans Bartlett test: {e}")
+            return {'error': f'Calcul impossible: {str(e)}'}
+    
+    def _kmo_test(self, X_scaled: np.ndarray) -> Dict:
+        """Test KMO (Kaiser-Meyer-Olkin)."""
+        try:
+            n, p = X_scaled.shape
+            if n < 2 or p < 2:
+                return {'kmo': 0, 'interpretation': 'Inadequate', 'adequate': False}
+            
+            corr_matrix = np.corrcoef(X_scaled.T)
+            inv_corr = np.linalg.pinv(corr_matrix)  # Utiliser pseudo-inverse pour stabilité
+            diag_inv = np.diag(inv_corr)
+            
+            # Éviter division par zéro
+            diag_inv_sqrt = np.sqrt(diag_inv)
+            diag_inv_sqrt[diag_inv_sqrt == 0] = 1e-10
+            
+            partial_corr = -inv_corr / np.outer(diag_inv_sqrt, diag_inv_sqrt)
+            np.fill_diagonal(partial_corr, 1)
+            
+            # Calcul du KMO
+            corr_squared_sum = np.sum(corr_matrix**2) - np.sum(np.diag(corr_matrix)**2)
+            partial_squared_sum = np.sum(partial_corr**2) - np.sum(np.diag(partial_corr)**2)
+            
+            if partial_squared_sum == 0:
+                kmo = 0
+            else:
+                kmo = corr_squared_sum / (corr_squared_sum + partial_squared_sum)
+                kmo = np.clip(kmo, 0, 1)  # S'assurer que c'est entre 0 et 1
+            
+            # Interprétation
+            interpretation = "Inacceptable"
+            if kmo >= 0.9:
+                interpretation = "Mervelous"
+            elif kmo >= 0.8:
+                interpretation = "Meritorious"
+            elif kmo >= 0.7:
+                interpretation = "Middling"
+            elif kmo >= 0.6:
+                interpretation = "Mediocre"
+            elif kmo >= 0.5:
+                interpretation = "Miserable"
+            
+            return {
+                'kmo': float(kmo),
+                'interpretation': interpretation,
+                'adequate': kmo >= 0.6
+            }
+        except Exception as e:
+            logger.error(f"Erreur dans KMO test: {e}")
+            return {'kmo': 0, 'interpretation': 'Error', 'adequate': False}
+    
+    def _build_pca_result(self, X_clean: pd.DataFrame, X_scaled: np.ndarray, 
+                         X_pca: np.ndarray, feature_names: List[str], 
+                         n_components: int, metrics: Dict) -> Dict:
+        """Construit le dictionnaire de résultats PCA de manière robuste."""
+        try:
+            # Calcul des loadings
+            if hasattr(self.pca, 'components_') and hasattr(self.pca, 'explained_variance_'):
+                loadings = self.pca.components_.T * np.sqrt(self.pca.explained_variance_)
+            else:
+                # Fallback: loadings simplifiés
+                loadings = np.ones((len(feature_names), n_components))
+            
+            # Construction du résultat
+            result = {
+                'scaler': self.scaler,
+                'pca': self.pca,
+                'X_pca': X_pca,
+                'X_scaled': X_scaled,
+                'X_clean': X_clean,
+                'feature_names': feature_names,
+                'n_components': n_components,
+                'explained_variance_ratio': self.pca.explained_variance_ratio_ if hasattr(self.pca, 'explained_variance_ratio_') else np.ones(n_components) / n_components,
+                'cumulative_variance': np.cumsum(self.pca.explained_variance_ratio_) if hasattr(self.pca, 'explained_variance_ratio_') else np.linspace(1/n_components, 1, n_components),
+                'loadings': loadings,
+                'metrics': metrics,
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Erreur dans la construction des résultats: {e}")
+            # Résultat minimal
+            return {
+                'scaler': self.scaler,
+                'pca': self.pca,
+                'X_pca': X_pca,
+                'X_scaled': X_scaled,
+                'X_clean': X_clean,
+                'feature_names': feature_names,
+                'n_components': n_components,
+                'explained_variance_ratio': np.ones(n_components) / n_components,
+                'cumulative_variance': np.linspace(1/n_components, 1, n_components),
+                'loadings': np.ones((len(feature_names), n_components)),
+                'metrics': metrics,
+            }
+
 
 # ============================================================================
 # FONCTIONS PUBLIQUES PRINCIPALES
@@ -153,9 +513,6 @@ def compute_pca(
         logger.error(f"❌ Erreur fatale dans compute_pca: {e}", exc_info=True)
         raise ValueError(f"Impossible de calculer la PCA: {str(e)}")
 
-# ============================================================================
-# FONCTIONS DE VISUALISATION (INTÉGRÉES)
-# ============================================================================
 
 def create_scree_plot(pca_result: Dict) -> go.Figure:
     """Crée un scree plot amélioré avec coude marqué."""
@@ -233,7 +590,13 @@ def create_scree_plot(pca_result: Dict) -> go.Figure:
         return fig
     except Exception as e:
         logger.error(f"Erreur dans create_scree_plot: {e}")
-        return go.Figure()
+        # Retourner une figure vide
+        fig = go.Figure()
+        fig.add_annotation(text="Erreur lors de la création du graphique",
+                          xref="paper", yref="paper",
+                          x=0.5, y=0.5, showarrow=False)
+        return fig
+
 
 def create_correlation_circle(pca_result: Dict, pc_x: int = 0, pc_y: int = 1, 
                             n_variables: int = 20, threshold: float = 0.3) -> go.Figure:
@@ -241,18 +604,16 @@ def create_correlation_circle(pca_result: Dict, pc_x: int = 0, pc_y: int = 1,
     try:
         loadings = pca_result['loadings']
         feature_names = pca_result['feature_names']
-        cos2 = pca_result['metrics']['variable_cos2']
         
-        # S'assurer que les indices sont valides
-        pc_x = min(pc_x, pca_result['n_components'] - 1)
-        pc_y = min(pc_y, pca_result['n_components'] - 1)
+        # Vérifier que les indices sont valides
+        if pc_x >= pca_result['n_components'] or pc_y >= pca_result['n_components']:
+            raise ValueError("Indices de composantes invalides")
         
         # Préparer les données
         df_vars = pd.DataFrame({
             'variable': feature_names,
             'cor_x': loadings[:, pc_x],
             'cor_y': loadings[:, pc_y],
-            'cos2': cos2,
             'length': np.sqrt(loadings[:, pc_x]**2 + loadings[:, pc_y]**2)
         })
         
@@ -286,11 +647,11 @@ def create_correlation_circle(pca_result: Dict, pc_x: int = 0, pc_y: int = 1,
                 x=df_vars['cor_x'], y=df_vars['cor_y'],
                 mode='markers+text',
                 marker=dict(
-                    size=df_vars['cos2'] * 30 + 10,  # Taille proportionnelle à cos2
+                    size=df_vars['length'] * 20 + 10,
                     color=df_vars['length'],
                     colorscale='Viridis',
                     showscale=True,
-                    colorbar=dict(title="Qualité")
+                    colorbar=dict(title="Longueur")
                 ),
                 text=df_vars['variable'],
                 textposition="top center",
@@ -298,21 +659,9 @@ def create_correlation_circle(pca_result: Dict, pc_x: int = 0, pc_y: int = 1,
                     "<b>%{text}</b><br>" +
                     "Corrélation PC1: %{x:.3f}<br>" +
                     "Corrélation PC2: %{y:.3f}<br>" +
-                    "Qualité: %{marker.color:.3f}<br>" +
-                    "Cos2: %{customdata[0]:.3f}<extra></extra>"
-                ),
-                customdata=np.stack((df_vars['cos2'],), axis=-1)
+                    "Longueur: %{marker.color:.3f}<extra></extra>"
+                )
             ))
-            
-            # Vecteurs
-            for _, row in df_vars.iterrows():
-                fig.add_trace(go.Scatter(
-                    x=[0, row['cor_x']], y=[0, row['cor_y']],
-                    mode='lines',
-                    line=dict(color='rgba(100, 100, 100, 0.3)', width=1),
-                    showlegend=False,
-                    hoverinfo='skip'
-                ))
         
         fig.update_layout(
             title=f"Cercle des corrélations - PC{pc_x+1} vs PC{pc_y+1}",
@@ -328,154 +677,18 @@ def create_correlation_circle(pca_result: Dict, pc_x: int = 0, pc_y: int = 1,
         return fig
     except Exception as e:
         logger.error(f"Erreur dans create_correlation_circle: {e}")
-        return go.Figure()
-
-def create_biplot(pca_result: Dict, pc_x: int = 0, pc_y: int = 1,
-                 n_individuals: int = 100, n_variables: int = 10) -> go.Figure:
-    """Crée un biplot (individus + variables)."""
-    try:
-        X_pca = pca_result['X_pca']
-        loadings = pca_result['loadings']
-        feature_names = pca_result['feature_names']
-        
-        # S'assurer que les indices sont valides
-        pc_x = min(pc_x, pca_result['n_components'] - 1)
-        pc_y = min(pc_y, pca_result['n_components'] - 1)
-        
-        # Échantillonner les individus
-        if len(X_pca) > n_individuals:
-            idx = np.random.choice(len(X_pca), n_individuals, replace=False)
-            individuals = X_pca[idx]
-        else:
-            individuals = X_pca
-        
-        # Sélectionner les variables importantes
-        importance = np.sqrt(loadings[:, pc_x]**2 + loadings[:, pc_y]**2)
-        top_vars_idx = np.argsort(importance)[-n_variables:]
-        
-        fig = make_subplots(
-            rows=1, cols=2,
-            subplot_titles=("Plan factoriel", "Zoom sur les variables"),
-            column_widths=[0.7, 0.3]
-        )
-        
-        # Individus
-        fig.add_trace(
-            go.Scatter(
-                x=individuals[:, pc_x], y=individuals[:, pc_y],
-                mode='markers',
-                marker=dict(size=8, color='lightblue', opacity=0.6),
-                name='Individus',
-                hovertemplate="Individu %{customdata}<br>PC1: %{x:.2f}<br>PC2: %{y:.2f}<extra></extra>",
-                customdata=np.arange(len(individuals))
-            ),
-            row=1, col=1
-        )
-        
-        # Variables (dans le grand graphique)
-        if len(top_vars_idx) > 0:
-            scale_factor = 0.8 * np.max(np.abs(individuals)) / np.max(np.abs(loadings[top_vars_idx]))
-            
-            for i in top_vars_idx:
-                fig.add_trace(
-                    go.Scatter(
-                        x=[0, loadings[i, pc_x] * scale_factor],
-                        y=[0, loadings[i, pc_y] * scale_factor],
-                        mode='lines',
-                        line=dict(color='red', width=2),
-                        showlegend=False,
-                        hoverinfo='skip'
-                    ),
-                    row=1, col=1
-                )
-                
-                fig.add_trace(
-                    go.Scatter(
-                        x=[loadings[i, pc_x] * scale_factor],
-                        y=[loadings[i, pc_y] * scale_factor],
-                        mode='markers+text',
-                        marker=dict(color='red', size=10),
-                        text=[feature_names[i]],
-                        textposition="top center",
-                        name=feature_names[i],
-                        showlegend=False,
-                        hovertemplate=f"<b>{feature_names[i]}</b><br>PC1: %{{x:.2f}}<br>PC2: %{{y:.2f}}<extra></extra>"
-                    ),
-                    row=1, col=1
-                )
-        
-        # Cercle des corrélations (zoom)
-        try:
-            circle_fig = create_correlation_circle(pca_result, pc_x, pc_y, n_variables)
-            if len(circle_fig.data) > 0:
-                fig.add_trace(circle_fig.data[0], row=1, col=2)
-        except:
-            pass
-        
-        fig.update_layout(
-            title=f"Biplot - PC{pc_x+1} vs PC{pc_y+1}",
-            height=600,
-            showlegend=True,
-            template="plotly_white"
-        )
-        
-        fig.update_xaxes(title_text=f"PC{pc_x+1}", row=1, col=1)
-        fig.update_yaxes(title_text=f"PC{pc_y+1}", row=1, col=1)
-        fig.update_xaxes(title_text=f"PC{pc_x+1}", range=[-1.1, 1.1], row=1, col=2)
-        fig.update_yaxes(title_text=f"PC{pc_y+1}", range=[-1.1, 1.1], row=1, col=2)
-        
+        # Retourner une figure vide
+        fig = go.Figure()
+        fig.add_annotation(text="Erreur lors de la création du graphique",
+                          xref="paper", yref="paper",
+                          x=0.5, y=0.5, showarrow=False)
         return fig
-    except Exception as e:
-        logger.error(f"Erreur dans create_biplot: {e}")
-        return go.Figure()
 
-def create_3d_pca_plot(pca_result: Dict) -> go.Figure:
-    """Crée une visualisation 3D des trois premières composantes."""
-    try:
-        if pca_result['n_components'] < 3:
-            raise ValueError("Au moins 3 composantes sont nécessaires pour la visualisation 3D")
-        
-        X_pca = pca_result['X_pca']
-        
-        # Qualité de représentation pour la couleur
-        cos2 = pca_result['metrics']['cos2_individuals']
-        
-        fig = go.Figure(data=go.Scatter3d(
-            x=X_pca[:, 0], y=X_pca[:, 1], z=X_pca[:, 2],
-            mode='markers',
-            marker=dict(
-                size=5,
-                color=cos2,
-                colorscale='Viridis',
-                colorbar=dict(title="Qualité (cos2)"),
-                showscale=True
-            ),
-            text=[f"Individu {i}" for i in range(len(X_pca))],
-            hovertemplate="%{text}<br>PC1: %{x:.2f}<br>PC2: %{y:.2f}<br>PC3: %{z:.2f}<br>Qualité: %{marker.color:.2f}<extra></extra>"
-        ))
-        
-        fig.update_layout(
-            title="Visualisation 3D des individus sur les trois premières composantes",
-            scene=dict(
-                xaxis_title=f"PC1 ({pca_result['explained_variance_ratio'][0]*100:.1f}%)",
-                yaxis_title=f"PC2 ({pca_result['explained_variance_ratio'][1]*100:.1f}%)",
-                zaxis_title=f"PC3 ({pca_result['explained_variance_ratio'][2]*100:.1f}%)"
-            ),
-            height=700,
-            template="plotly_white"
-        )
-        
-        return fig
-    except Exception as e:
-        logger.error(f"Erreur dans create_3d_pca_plot: {e}")
-        return go.Figure()
-
-# ============================================================================
-# FONCTIONS UTILITAIRES (autres fonctions nécessaires)
-# ============================================================================
 
 def get_pca_summary(pca_result: Dict) -> pd.DataFrame:
-    """Crée un DataFrame récapitulatif de la PCA."""
+    """
+    Crée un DataFrame récapitulatif de la PCA avec statistiques avancées.
+    """
     try:
         n_components = pca_result['n_components']
         
@@ -494,13 +707,25 @@ def get_pca_summary(pca_result: Dict) -> pd.DataFrame:
         logger.error(f"Erreur dans get_pca_summary: {e}")
         return pd.DataFrame({'error': [str(e)]})
 
+
 def get_top_loadings(
     pca_result: Dict, 
     component: int = 0, 
     n_features: int = 10,
     threshold: float = 0.3
 ) -> pd.DataFrame:
-    """Récupère les variables les plus corrélées avec une composante."""
+    """
+    Récupère les variables les plus corrélées avec une composante.
+    
+    Args:
+        pca_result: Résultat de la PCA
+        component: Index de la composante (0-based)
+        n_features: Nombre de features à retourner
+        threshold: Seuil minimum pour la valeur absolue du loading
+        
+    Returns:
+        DataFrame avec les loadings
+    """
     try:
         if component >= pca_result['n_components']:
             raise ValueError(f"Component {component} n'existe pas. Maximum: {pca_result['n_components']-1}")
@@ -540,8 +765,11 @@ def get_top_loadings(
         logger.error(f"Erreur dans get_top_loadings: {e}")
         return pd.DataFrame({'error': [str(e)]})
 
+
 def suggest_optimal_components(pca_result: Dict, thresholds: List[float] = None) -> pd.DataFrame:
-    """Suggère des nombres optimaux de composantes avec différentes méthodes."""
+    """
+    Suggère des nombres optimaux de composantes avec différentes méthodes.
+    """
     try:
         if thresholds is None:
             thresholds = [0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
@@ -583,8 +811,11 @@ def suggest_optimal_components(pca_result: Dict, thresholds: List[float] = None)
         logger.error(f"Erreur dans suggest_optimal_components: {e}")
         return pd.DataFrame({'error': [str(e)]})
 
+
 def generate_pca_report(pca_result: Dict) -> str:
-    """Génère un rapport textuel complet de l'analyse PCA."""
+    """
+    Génère un rapport textuel complet de l'analyse PCA.
+    """
     try:
         n_components = pca_result['n_components']
         total_variance = pca_result['cumulative_variance'][-1]
@@ -650,99 +881,33 @@ IV. INTERPRÉTATION
         logger.error(f"Erreur dans generate_pca_report: {e}")
         return f"❌ Erreur dans la génération du rapport: {str(e)}"
 
+
 # ============================================================================
-# VERSION SIMPLIFIÉE POUR VOTRE APPLICATION STREAMLIT
+# FONCTION POUR VOTRE APPLICATION STREAMLIT
 # ============================================================================
 
-def page_acp_simplified(user_features: pd.DataFrame):
-    """Version simplifiée de la page ACP pour votre application Streamlit."""
-    import streamlit as st
+def run_pca_analysis(user_features: pd.DataFrame, n_components: Optional[int] = None):
+    """
+    Fonction simplifiée pour exécuter l'analyse PCA dans Streamlit.
     
-    st.markdown('<h1 class="main-header">📊 Analyse en Composantes Principales</h1>', unsafe_allow_html=True)
-    
-    # Paramètres
-    with st.sidebar.expander("⚙️ Paramètres PCA", expanded=False):
-        n_components = st.slider(
-            "Nombre de composantes",
-            min_value=2,
-            max_value=min(10, user_features.shape[1]),
-            value=min(3, user_features.shape[1]),
-            help="Nombre de composantes principales à calculer"
+    Args:
+        user_features: DataFrame des features utilisateur
+        n_components: Nombre de composantes (None pour automatique)
+        
+    Returns:
+        Tuple (pca_result, error_message)
+    """
+    try:
+        # Calcul de la PCA
+        pca_result = compute_pca(
+            user_features, 
+            n_components=n_components,
+            variance_threshold=0.9,
+            random_state=42
         )
         
-        variance_threshold = st.slider(
-            "Seuil de variance minimale",
-            min_value=0.5,
-            max_value=0.99,
-            value=0.9,
-            step=0.05,
-            help="Variance minimale à conserver si choix automatique"
-        )
-    
-    # Bouton de calcul
-    if st.button("🚀 Lancer l'analyse PCA", type="primary", use_container_width=True):
-        with st.spinner("Analyse PCA en cours..."):
-            try:
-                # Calcul PCA
-                pca_result = compute_pca(
-                    user_features, 
-                    n_components=n_components,
-                    variance_threshold=variance_threshold
-                )
-                
-                # Métriques
-                st.markdown("### 📈 Métriques principales")
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    total_var = pca_result['cumulative_variance'][-1] * 100
-                    st.metric("Variance totale expliquée", f"{total_var:.1f}%")
-                
-                with col2:
-                    avg_quality = pca_result['metrics']['mean_cos2'] * 100
-                    st.metric("Qualité moyenne", f"{avg_quality:.1f}%")
-                
-                with col3:
-                    kmo = pca_result['metrics'].get('kmo_measure', {}).get('kmo', 0)
-                    st.metric("Indice KMO", f"{kmo:.3f}")
-                
-                with col4:
-                    st.metric("Composantes retenues", pca_result['n_components'])
-                
-                # Visualisations
-                tab1, tab2, tab3 = st.tabs(["📊 Scree Plot", "🔵 Cercle des corrélations", "🎯 Biplot"])
-                
-                with tab1:
-                    st.plotly_chart(create_scree_plot(pca_result), use_container_width=True)
-                
-                with tab2:
-                    pc_x = st.selectbox("Composante X", range(pca_result['n_components']), 0, key="corr_x")
-                    pc_y = st.selectbox("Composante Y", range(pca_result['n_components']), 1, 
-                                      key="corr_y", disabled=pc_x)
-                    
-                    st.plotly_chart(
-                        create_correlation_circle(pca_result, pc_x, pc_y), 
-                        use_container_width=True
-                    )
-                
-                with tab3:
-                    if pca_result['n_components'] >= 2:
-                        st.plotly_chart(
-                            create_biplot(pca_result), 
-                            use_container_width=True
-                        )
-                
-                # Visualisation 3D
-                if pca_result['n_components'] >= 3:
-                    st.subheader("🌐 Visualisation 3D")
-                    st.plotly_chart(create_3d_pca_plot(pca_result), use_container_width=True)
-                
-                # Rapport
-                with st.expander("📄 Voir le rapport complet"):
-                    report = generate_pca_report(pca_result)
-                    st.code(report)
-                
-            except Exception as e:
-                st.error(f"❌ Erreur lors de l'analyse PCA: {str(e)}")
-    else:
-        st.info("👈 Cliquez sur le bouton ci-dessus pour lancer l'analyse PCA")
+        return pca_result, None
+        
+    except Exception as e:
+        logger.error(f"Erreur dans l'analyse PCA: {e}", exc_info=True)
+        return None, str(e)
