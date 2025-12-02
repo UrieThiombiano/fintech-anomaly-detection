@@ -94,8 +94,6 @@ def scale_features(
             X_scaled = scaler.transform(X)
             
         return X_scaled, scaler, None
-
-
 def prepare_numeric_data(
     df: pd.DataFrame,
     drop_non_numeric: bool = True,

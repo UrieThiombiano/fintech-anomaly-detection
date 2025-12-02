@@ -3,7 +3,7 @@ Fonctions pour la détection d'anomalies (Isolation Forest).
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple, List, Optional  # <-- List ajouté ici
+from typing import Dict, Tuple, List, Optional
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
@@ -21,20 +21,11 @@ def train_isolation_forest(
 ) -> Dict:
     """
     Entraîne un modèle Isolation Forest pour la détection d'anomalies.
-    
-    Args:
-        X: Données d'entrée
-        contamination: Proportion attendue d'anomalies
-        random_state: Seed pour la reproductibilité
-        n_estimators: Nombre d'arbres dans la forêt
-        
-    Returns:
-        Dictionnaire avec le modèle et les résultats
     """
     logger.info(f"Entraînement Isolation Forest avec contamination={contamination}")
     
-    # Standardisation
-    X_scaled, scaler = scale_features(X)
+    # CORRECTION ICI : 3 valeurs au lieu de 2
+    X_scaled, scaler, _ = scale_features(X)
     
     # Isolation Forest
     iforest = IsolationForest(
@@ -78,14 +69,6 @@ def analyze_anomalies(
 ) -> pd.DataFrame:
     """
     Analyse les anomalies détectées et les enrichit avec les données originales.
-    
-    Args:
-        original_df: DataFrame original des transactions
-        anomaly_result: Résultat de train_isolation_forest
-        score_threshold: Seuil pour filtrer les anomalies (si None, utilise is_anomaly)
-        
-    Returns:
-        DataFrame enrichi avec les scores d'anomalie
     """
     df_anomalies = original_df.copy()
     df_anomalies['anomaly_score'] = anomaly_result['anomaly_scores']
@@ -106,12 +89,6 @@ def analyze_anomalies(
 def get_anomaly_statistics(anomaly_result: Dict) -> Dict:
     """
     Calcule des statistiques sur les anomalies détectées.
-    
-    Args:
-        anomaly_result: Résultat de train_isolation_forest
-        
-    Returns:
-        Dictionnaire avec statistiques
     """
     scores = anomaly_result['anomaly_scores']
     is_anomaly = anomaly_result['is_anomaly']
@@ -140,13 +117,6 @@ def suggest_contamination(
 ) -> float:
     """
     Suggère une valeur de contamination basée sur les outliers statistiques.
-    
-    Args:
-        X: Données d'entrée
-        percentiles: Liste des percentiles à considérer
-        
-    Returns:
-        Valeur de contamination suggérée
     """
     if percentiles is None:
         percentiles = [95, 97.5, 99, 99.5]
@@ -154,8 +124,8 @@ def suggest_contamination(
     # Calculer les distances de Mahalanobis comme proxy pour les outliers
     from scipy.stats import chi2
     
-    # Standardisation
-    X_scaled, _ = scale_features(X)
+    # CORRECTION ICI : 3 valeurs au lieu de 2
+    X_scaled, _, _ = scale_features(X)
     
     # Distances au centre (simplifié)
     distances = np.sqrt(np.sum(X_scaled**2, axis=1))
