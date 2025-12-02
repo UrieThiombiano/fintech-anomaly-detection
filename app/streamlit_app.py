@@ -593,76 +593,683 @@ def page_kmeans(user_features):
 
 def page_anomalies(df_raw, tx_features):
     """Page de détection d'anomalies."""
-    st.markdown('<h1 class="main-header">🚨 Détection d\'Anomalies</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🚨 Détection d\'Anomalies Transactionnelles</h1>', unsafe_allow_html=True)
     
-    # Vérifier les données
-    st.info("Vérification des données transactionnelles...")
+    # ==================== SECTION 1: INTRODUCTION PÉDAGOGIQUE ====================
+    st.markdown("""
+    <div class="info-box">
+    <h3>🎯 Objectif de cette analyse</h3>
+    <p>Identifier des transactions <b>atypiques</b> pouvant correspondre à :</p>
+    <ul>
+    <li>Fraude ou abus de cashback</li>
+    <li>Comportements suspects d'utilisateurs</li>
+    <li>Erreurs de saisie ou bugs système</li>
+    <li>Patterns transactionnels rares</li>
+    </ul>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Afficher les types de données
-    with st.expander("Afficher les types de données transactionnelles"):
-        st.write(f"Shape: {tx_features.shape}")
-        st.write(f"Types: {tx_features.dtypes.value_counts().to_dict()}")
+    # Explication du concept avec des colonnes
+    col1, col2, col3 = st.columns(3)
     
-    # Préparer les features transactionnelles
-    try:
-        # Filtrer uniquement les colonnes numériques
-        tx_numeric = tx_features.select_dtypes(include=[np.number])
-        
-        if tx_numeric.empty:
-            st.error("❌ Aucune colonne numérique trouvée dans les features transactionnelles!")
-            st.info("""
-            **Solution :**
-            1. Vérifiez que vos données contiennent des colonnes numériques
-            2. Les colonnes comme 'product_amount', 'cashback', etc. doivent être numériques
-            """)
-            return
-        
-        st.success(f"✅ {tx_numeric.shape[1]} colonnes numériques disponibles")
-        
-        # Paramètres
+    with col1:
+        st.markdown("""
+        <div class="metric-card">
+        <h4>📊 Isolation Forest</h4>
+        <p><b>Principe :</b> Forêt d'arbres aléatoires qui isolent les points</p>
+        <p><b>Avantage :</b> Pas besoin de données labellisées</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div class="metric-card">
+        <h4>🔍 Contamination</h4>
+        <p><b>Définition :</b> Proportion attendue d'anomalies</p>
+        <p><b>Typique :</b> 1-5% selon le domaine</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown("""
+        <div class="metric-card">
+        <h4>📈 Score d'anomalie</h4>
+        <p><b>Interprétation :</b> Plus élevé = plus anormal</p>
+        <p><b>Seuil :</b> Généralement > percentile 95</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # ==================== SECTION 2: PRÉPARATION DES DONNÉES ====================
+    st.markdown("---")
+    st.markdown('<h2 class="sub-header">📋 Préparation des Données</h2>', unsafe_allow_html=True)
+    
+    with st.expander("🔍 Voir les features transactionnelles utilisées", expanded=True):
+        # Afficher un résumé des features
+        if not tx_features.empty:
+            st.write(f"**Nombre de transactions analysées :** {len(tx_features):,}")
+            st.write(f"**Nombre de features :** {tx_features.shape[1]}")
+            
+            # Statistiques descriptives
+            st.subheader("Statistiques descriptives des features")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Types de données :**")
+                dtype_counts = tx_features.dtypes.value_counts()
+                for dtype, count in dtype_counts.items():
+                    st.write(f"- {dtype}: {count} colonnes")
+            
+            with col2:
+                st.write("**Valeurs manquantes :**")
+                missing = tx_features.isna().sum()
+                missing_pct = (missing / len(tx_features) * 100).round(2)
+                missing_df = pd.DataFrame({
+                    'Colonne': missing.index,
+                    'Valeurs manquantes': missing.values,
+                    'Pourcentage': missing_pct.values
+                })
+                st.dataframe(missing_df[missing_df['Valeurs manquantes'] > 0], 
+                           use_container_width=True, hide_index=True)
+            
+            # Matrice de corrélation
+            if tx_features.shape[1] > 1:
+                st.subheader("🔗 Matrice de corrélations")
+                numeric_cols = tx_features.select_dtypes(include=[np.number]).columns
+                if len(numeric_cols) > 1:
+                    corr_matrix = tx_features[numeric_cols].corr()
+                    fig = px.imshow(corr_matrix, 
+                                  title="Corrélations entre features transactionnelles",
+                                  color_continuous_scale='RdBu',
+                                  zmin=-1, zmax=1)
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.markdown("""
+                    **💡 Interprétation :**
+                    - **Couleurs bleues** : Corrélation positive (variables évoluent ensemble)
+                    - **Couleurs rouges** : Corrélation négative (variables évoluent en opposition)
+                    - **Variables fortement corrélées** peuvent être redondantes
+                    """)
+    
+    # ==================== SECTION 3: PARAMÉTRAGE DU MODÈLE ====================
+    st.markdown("---")
+    st.markdown('<h2 class="sub-header">⚙️ Configuration du Modèle</h2>', unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
         contamination = st.slider(
-            "Contamination (proportion d'anomalies attendue)",
+            "**Contamination** (proportion d'anomalies attendue)",
             min_value=0.001,
             max_value=0.2,
             value=0.02,
             step=0.001,
-            help="Proportion approximative d'anomalies dans les données"
+            help="""Paramètre crucial qui influence la sensibilité du détecteur.
+            \n• **Valeur faible (0.01)** : Détection très conservative
+            \n• **Valeur élevée (0.1)** : Détection plus agressive"""
         )
-        
-        if st.button("🔍 Détecter les anomalies", type="primary"):
-            with st.spinner("Entraînement du modèle en cours..."):
-                try:
-                    # Entraînement
-                    anomaly_result = train_isolation_forest(tx_numeric, contamination=contamination)
-                    
-                    # Statistiques
-                    stats = get_anomaly_statistics(anomaly_result)
-                    
-                    # Afficher les résultats
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Transactions analysées", stats['n_total'])
-                    with col2:
-                        st.metric("Anomalies détectées", stats['n_anomalies'])
-                    with col3:
-                        st.metric("Taux d'anomalies", f"{stats['pct_anomalies']:.1f}%")
-                    with col4:
-                        st.metric("Score moyen", f"{stats['score_mean']:.3f}")
-                    
-                    # ... reste du code pour afficher les anomalies ...
-                    
-                except Exception as e:
-                    st.error(f"❌ Erreur lors de la détection d'anomalies: {str(e)}")
-                    st.info("""
-                    **Solutions possibles :**
-                    1. Réduisez le nombre de colonnes
-                    2. Vérifiez qu'il n'y a pas de valeurs manquantes
-                    3. Essayez avec contamination=0.05
-                    """)
     
-    except Exception as e:
-        st.error(f"❌ Erreur dans la préparation des données: {str(e)}")
-
+    with col2:
+        n_estimators = st.slider(
+            "**Nombre d'arbres**",
+            min_value=10,
+            max_value=500,
+            value=100,
+            step=10,
+            help="Plus d'arbres = modèle plus stable mais plus lent"
+        )
+    
+    with col3:
+        # Bouton pour suggestion automatique
+        if st.button("🎯 Suggérer automatiquement", key="suggest_contamination"):
+            try:
+                suggested = suggest_contamination(tx_features)
+                st.success(f"Contamination suggérée: **{suggested:.3f}**")
+                contamination = suggested
+            except:
+                st.info("Utilisez la valeur par défaut de 2%")
+    
+    # Explication technique
+    st.markdown("""
+    <div class="warning-box">
+    <h4>🧠 Fonctionnement d'Isolation Forest</h4>
+    <p><b>Algorithme :</b></p>
+    <ol>
+    <li>Construction d'arbres de décision aléatoires</li>
+    <li>Les anomalies sont <b>isolées plus rapidement</b> (moins de décisions)</li>
+    <li>Le score d'anomalie = longueur moyenne du chemin d'isolation</li>
+    <li>Seuil automatique basé sur la contamination spécifiée</li>
+    </ol>
+    <p><b>Avantages :</b> Pas besoin de labels, efficace sur données multidimensionnelles</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # ==================== SECTION 4: ENTRAÎNEMENT ET RÉSULTATS ====================
+    st.markdown("---")
+    st.markdown('<h2 class="sub-header">🔬 Résultats de la Détection</h2>', unsafe_allow_html=True)
+    
+    if st.button("🚀 Lancer la détection d'anomalies", type="primary", use_container_width=True):
+        with st.spinner("🧠 Entraînement du modèle en cours..."):
+            try:
+                # 1. Entraînement du modèle
+                anomaly_result = train_isolation_forest(
+                    tx_features, 
+                    contamination=contamination,
+                    n_estimators=n_estimators
+                )
+                
+                # 2. Statistiques
+                stats = get_anomaly_statistics(anomaly_result)
+                
+                # ==================== SECTION 4.1: MÉTRIQUES DE PERFORMANCE ====================
+                st.success("✅ Modèle entraîné avec succès !")
+                
+                # KPI Cards
+                st.subheader("📊 Métriques de performance")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric(
+                        "Transactions analysées",
+                        f"{stats['n_total']:,}",
+                        help="Nombre total de transactions traitées"
+                    )
+                
+                with col2:
+                    st.metric(
+                        "Anomalies détectées",
+                        f"{stats['n_anomalies']:,}",
+                        delta=f"{stats['pct_anomalies']:.1f}%",
+                        delta_color="inverse",
+                        help="Nombre et pourcentage de transactions anormales"
+                    )
+                
+                with col3:
+                    st.metric(
+                        "Score moyen",
+                        f"{stats['score_mean']:.3f}",
+                        help="Score d'anomalie moyen (0 = normal, >0 = anormal)"
+                    )
+                
+                with col4:
+                    st.metric(
+                        "Seuil Q95",
+                        f"{stats['score_q95']:.3f}",
+                        help="95ème percentile - seuil d'alerte recommandé"
+                    )
+                
+                # ==================== SECTION 4.2: DISTRIBUTION DES SCORES ====================
+                st.subheader("📈 Distribution des scores d'anomalie")
+                
+                scores = anomaly_result['anomaly_scores']
+                is_anomaly = anomaly_result['is_anomaly']
+                
+                # Créer un DataFrame pour la visualisation
+                df_scores = pd.DataFrame({
+                    'Score': scores,
+                    'Anomalie': is_anomaly,
+                    'Catégorie': np.where(is_anomaly, 'Anomalie', 'Normal')
+                })
+                
+                # Graphique 1: Histogramme avec densité
+                fig1 = px.histogram(
+                    df_scores, 
+                    x='Score',
+                    color='Catégorie',
+                    nbins=50,
+                    title="Distribution des scores d'anomalie",
+                    color_discrete_map={'Normal': 'blue', 'Anomalie': 'red'},
+                    opacity=0.7,
+                    barmode='overlay'
+                )
+                
+                # Ajouter une ligne verticale pour le seuil
+                threshold = np.percentile(scores, 95)
+                fig1.add_vline(
+                    x=threshold, 
+                    line_dash="dash", 
+                    line_color="green",
+                    annotation_text=f"Seuil 95% ({threshold:.3f})",
+                    annotation_position="top right"
+                )
+                
+                st.plotly_chart(fig1, use_container_width=True)
+                
+                # Graphique 2: Box plot par catégorie
+                fig2 = px.box(
+                    df_scores,
+                    x='Catégorie',
+                    y='Score',
+                    color='Catégorie',
+                    title="Distribution comparative des scores",
+                    points="all"
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+                
+                # ==================== SECTION 4.3: ANALYSE DES ANOMALIES ====================
+                st.subheader("🔍 Analyse détaillée des anomalies")
+                
+                # Seuil interactif
+                score_threshold = st.slider(
+                    "**Seuil de score pour filtrer les anomalies**",
+                    min_value=float(scores.min()),
+                    max_value=float(scores.max()),
+                    value=float(threshold),
+                    step=0.01,
+                    help="Ajustez ce seuil pour affiner la détection"
+                )
+                
+                # Analyser les anomalies
+                df_anomalies = analyze_anomalies(df_raw, anomaly_result, score_threshold)
+                high_score_tx = df_anomalies[df_anomalies['is_above_threshold']].copy()
+                
+                st.metric(
+                    f"Transactions au-dessus du seuil ({score_threshold:.3f})",
+                    f"{len(high_score_tx):,}",
+                    delta=f"{(len(high_score_tx)/len(df_raw)*100):.1f}%",
+                    delta_color="inverse"
+                )
+                
+                if not high_score_tx.empty:
+                    # Afficher les transactions suspectes
+                    st.subheader(f"📋 Top {min(20, len(high_score_tx))} transactions les plus suspectes")
+                    
+                    # Colonnes à afficher
+                    display_cols = [
+                        'transaction_id', 'user_id', 'transaction_date',
+                        'product_category', 'product_amount', 'cashback',
+                        'payment_method', 'anomaly_score'
+                    ]
+                    
+                    # Garder seulement les colonnes présentes
+                    available_cols = [col for col in display_cols if col in high_score_tx.columns]
+                    
+                    # Formater le DataFrame
+                    display_df = high_score_tx[available_cols + ['anomaly_score']].head(20).copy()
+                    
+                    # Ajouter un indicateur visuel
+                    def color_anomaly_score(val):
+                        if val > threshold * 1.5:
+                            return 'background-color: #ffcccc'  # Rouge clair
+                        elif val > threshold:
+                            return 'background-color: #fff3cd'  # Jaune clair
+                        else:
+                            return ''
+                    
+                    styled_df = display_df.style.format({
+                        'anomaly_score': '{:.3f}',
+                        'product_amount': '{:.2f}',
+                        'cashback': '{:.2f}'
+                    }).applymap(color_anomaly_score, subset=['anomaly_score'])
+                    
+                    st.dataframe(styled_df, use_container_width=True)
+                    
+                    # ==================== SECTION 4.4: ANALYSE DES PATTERNS ====================
+                    st.subheader("📊 Patterns des anomalies détectées")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Catégories des anomalies
+                        if 'product_category' in high_score_tx.columns:
+                            cat_counts = high_score_tx['product_category'].value_counts().head(10)
+                            fig_cat = px.bar(
+                                x=cat_counts.index, 
+                                y=cat_counts.values,
+                                title="Catégories de produits des anomalies",
+                                labels={'x': 'Catégorie', 'y': 'Nombre'},
+                                color=cat_counts.values,
+                                color_continuous_scale='reds'
+                            )
+                            st.plotly_chart(fig_cat, use_container_width=True)
+                    
+                    with col2:
+                        # Méthodes de paiement
+                        if 'payment_method' in high_score_tx.columns:
+                            pm_counts = high_score_tx['payment_method'].value_counts().head(10)
+                            fig_pm = px.pie(
+                                values=pm_counts.values,
+                                names=pm_counts.index,
+                                title="Répartition par méthode de paiement",
+                                hole=0.4
+                            )
+                            st.plotly_chart(fig_pm, use_container_width=True)
+                    
+                    # Distribution des montants
+                    if 'product_amount' in high_score_tx.columns:
+                        st.subheader("💰 Analyse des montants")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            fig_amount = px.box(
+                                high_score_tx,
+                                y='product_amount',
+                                title="Distribution des montants des anomalies",
+                                points="all"
+                            )
+                            st.plotly_chart(fig_amount, use_container_width=True)
+                        
+                        with col2:
+                            # Comparaison avec l'ensemble des données
+                            if 'product_amount' in df_raw.columns:
+                                fig_compare = go.Figure()
+                                fig_compare.add_trace(go.Box(
+                                    y=df_raw['product_amount'],
+                                    name='Toutes transactions',
+                                    boxpoints=False
+                                ))
+                                fig_compare.add_trace(go.Box(
+                                    y=high_score_tx['product_amount'],
+                                    name='Anomalies',
+                                    boxpoints=False,
+                                    marker_color='red'
+                                ))
+                                fig_compare.update_layout(
+                                    title="Comparaison des montants",
+                                    yaxis_title="Montant (€)",
+                                    showlegend=True
+                                )
+                                st.plotly_chart(fig_compare, use_container_width=True)
+                    
+                    # ==================== SECTION 4.5: RAPPORT D'ANALYSE ====================
+                    st.markdown("---")
+                    st.markdown('<h2 class="sub-header">📄 Rapport d\'Analyse</h2>', unsafe_allow_html=True)
+                    
+                    with st.expander("📋 Synthèse des résultats", expanded=True):
+                        st.markdown(f"""
+                        ### Résumé exécutif
+                        
+                        **📊 Données analysées :**
+                        - {stats['n_total']:,} transactions traitées
+                        - {tx_features.shape[1]} features utilisées
+                        - Contamination paramétrée : {contamination:.1%}
+                        
+                        **🚨 Résultats de détection :**
+                        - **{stats['n_anomalies']:,} anomalies** détectées ({stats['pct_anomalies']:.1f}% du total)
+                        - Score moyen : {stats['score_mean']:.3f}
+                        - Seuil de détection (Q95) : {stats['score_q95']:.3f}
+                        
+                        **🎯 Transactions les plus suspectes :**
+                        - Score maximum : {stats['score_max']:.3f}
+                        - {len(high_score_tx):,} transactions au-dessus du seuil ({score_threshold:.3f})
+                        
+                        **💡 Recommandations :**
+                        1. **Vérifier manuellement** les transactions avec score > {threshold:.3f}
+                        2. **Analyser les patterns** récurrents dans les catégories/anomalies
+                        3. **Ajuster la contamination** selon les résultats métier
+                        """)
+                    
+                    # ==================== SECTION 4.6: EXPORT DES RÉSULTATS ====================
+                    st.subheader("💾 Export des résultats")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # CSV des anomalies
+                        csv = high_score_tx.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Télécharger les anomalies (CSV)",
+                            data=csv,
+                            file_name="anomalies_detectees.csv",
+                            mime="text/csv",
+                            help="Exporte la liste des transactions anormales"
+                        )
+                    
+                    with col2:
+                        # Rapport PDF (simulé)
+                        if st.button("📄 Générer un rapport PDF", help="Génère un rapport détaillé"):
+                            st.info("""
+                            **Fonctionnalité PDF :**
+                            Pour un déploiement complet, cette fonctionnalité pourrait :
+                            1. Générer un PDF avec tous les graphiques
+                            2. Inclure les statistiques détaillées
+                            3. Ajouter des recommandations métier
+                            4. Exporter au format professionnel
+                            """)
+                
+                else:
+                    st.warning("⚠️ Aucune transaction ne dépasse le seuil actuel.")
+                    st.info("""
+                    **Suggestions :**
+                    1. Réduisez le seuil de détection
+                    2. Augmentez la contamination
+                    3. Vérifiez la qualité des données
+                    """)
+                
+                # ==================== SECTION 5: ÉVALUATION DU MODÈLE ====================
+                st.markdown("---")
+                st.markdown('<h2 class="sub-header">🎯 Évaluation du Modèle</h2>', unsafe_allow_html=True)
+                
+                with st.expander("🧪 Tests et validations", expanded=True):
+                    st.markdown("""
+                    ### Méthodologie d'évaluation
+                    
+                    **📏 Métriques utilisées :**
+                    
+                    1. **Distribution des scores** : Vérification de la séparation normale/anomalie
+                    2. **Consistance des résultats** : Répartition cohérente avec la contamination
+                    3. **Analyse des features** : Importance des variables dans la décision
+                    
+                    **✅ Critères de qualité :**
+                    - **Séparation claire** entre scores normaux et anormaux
+                    - **Distribution logique** des anomalies détectées
+                    - **Robustesse** aux variations de paramètres
+                    - **Interprétabilité** des résultats
+                    
+                    **🔬 Prochaines étapes possibles :**
+                    - Validation croisée sur différentes périodes
+                    - Comparaison avec d'autres algorithmes (LOF, One-Class SVM)
+                    - Intégration de features temporelles supplémentaires
+                    """)
+                    
+                    # Visualisation de la qualité
+                    if not df_scores.empty:
+                        # QQ-plot pour vérifier la distribution
+                        from scipy import stats
+                        
+                        fig_qq = go.Figure()
+                        
+                        # Données pour QQ-plot
+                        normal_scores = df_scores[df_scores['Catégorie'] == 'Normal']['Score']
+                        theoretical_quantiles = stats.norm.ppf(np.linspace(0.01, 0.99, len(normal_scores)))
+                        
+                        fig_qq.add_trace(go.Scatter(
+                            x=theoretical_quantiles,
+                            y=np.sort(normal_scores),
+                            mode='markers',
+                            name='QQ-plot',
+                            marker=dict(size=8, opacity=0.6)
+                        ))
+                        
+                        # Ligne de référence
+                        min_val = min(theoretical_quantiles.min(), normal_scores.min())
+                        max_val = max(theoretical_quantiles.max(), normal_scores.max())
+                        fig_qq.add_trace(go.Scatter(
+                            x=[min_val, max_val],
+                            y=[min_val, max_val],
+                            mode='lines',
+                            name='y=x',
+                            line=dict(dash='dash', color='red')
+                        ))
+                        
+                        fig_qq.update_layout(
+                            title="QQ-plot : Normalité des scores 'normaux'",
+                            xaxis_title="Quantiles théoriques (Normale)",
+                            yaxis_title="Quantiles observés",
+                            showlegend=True
+                        )
+                        
+                        st.plotly_chart(fig_qq, use_container_width=True)
+                        
+                        st.markdown("""
+                        **💡 Interprétation du QQ-plot :**
+                        - **Points sur la ligne rouge** : Distribution normale
+                        - **Points au-dessus de la ligne** : Queue de distribution plus épaisse
+                        - **Points en-dessous** : Distribution différente de la normale
+                        """)
+                
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la détection d'anomalies: {str(e)}")
+                
+                # Aide au débogage
+                with st.expander("🔧 Aide au débogage"):
+                    st.markdown(f"""
+                    **Erreur détaillée :** `{e}`
+                    
+                    **Solutions possibles :**
+                    
+                    1. **Vérifiez les données :**
+                       - Les features doivent être numériques
+                       - Pas de valeurs manquantes excessives
+                       - Pas de colonnes avec variance nulle
+                    
+                    2. **Paramètres :**
+                       - Réduisez la contamination
+                       - Diminuez le nombre d'arbres
+                       - Utilisez moins de features
+                    
+                    3. **Données d'exemple :**
+                       - Téléchargez notre [fichier d'exemple](https://example.com/sample_data.csv)
+                       - Testez avec 100-200 transactions d'abord
+                    """)
+                    
+                    # Affichage des données pour débogage
+                    if not tx_features.empty:
+                        st.write("**Aperçu des données :**")
+                        st.dataframe(tx_features.head(), use_container_width=True)
+                        
+                        st.write("**Statistiques :**")
+                        st.write(f"- Shape: {tx_features.shape}")
+                        st.write(f"- Types: {tx_features.dtypes.unique()}")
+                        st.write(f"- NaN: {tx_features.isna().sum().sum()}")
+    else:
+        # Mode attente
+        st.info("👆 **Cliquez sur le bouton ci-dessus pour lancer la détection d'anomalies**")
+        
+        # Exemple de ce qui va se passer
+        with st.expander("🎯 Prévisualisation de l'analyse"):
+            st.markdown("""
+            ### Ce que vous allez obtenir :
+            
+            1. **📊 Métriques de performance** :
+               - Nombre d'anomalies détectées
+               - Pourcentage d'anomalies
+               - Scores statistiques
+            
+            2. **📈 Visualisations** :
+               - Distribution des scores
+               - Comparaison normale/anomalie
+               - Analyse par catégorie
+            
+            3. **🔍 Analyse détaillée** :
+               - Liste des transactions suspectes
+               - Patterns récurrents
+               - Recommandations
+            
+            4. **💾 Export** :
+               - Fichier CSV des anomalies
+               - Rapports synthétiques
+            """)
+            
+            # Exemple visuel
+            st.image("https://miro.medium.com/v2/resize:fit:1400/1*YRim7T6BqrSylr8EaqKqZQ.png", 
+                    caption="Exemple de détection d'anomalies avec Isolation Forest")
+    
+    # ==================== SECTION 6: POUR ALLER PLUS LOIN ====================
+    st.markdown("---")
+    st.markdown('<h2 class="sub-header">🚀 Pour aller plus loin</h2>', unsafe_allow_html=True)
+    
+    tab1, tab2, tab3 = st.tabs(["📚 Théorie", "🔧 Techniques avancées", "📈 Applications métier"])
+    
+    with tab1:
+        st.markdown("""
+        ### Fondements théoriques
+        
+        **📖 Isolation Forest (Liu et al., 2008)**
+        
+        **Principe :** Les anomalies sont rares et différentes → elles sont isolables en peu de décisions
+        
+        **Algorithme :**
+        1. Sélection aléatoire d'une feature
+        2. Sélection aléatoire d'une valeur de coupure
+        3. Répétition jusqu'à isolation complète
+        4. Score = longueur moyenne du chemin
+        
+        **Formule du score :**
+        ```
+        s(x, n) = 2^{-E(h(x))/c(n)}
+        où :
+        - h(x) = hauteur du chemin d'isolation
+        - c(n) = hauteur moyenne d'un arbre binaire
+        - E(h(x)) = espérance sur plusieurs arbres
+        ```
+        
+        **Avantages :**
+        - Linéaire en temps et mémoire
+        - Efficace en haute dimension
+        - Pas besoin de distance métrique
+        """)
+    
+    with tab2:
+        st.markdown("""
+        ### Techniques avancées
+        
+        **🎯 Améliorations possibles :**
+        
+        1. **Ensemble methods** :
+           - Combinaison avec Local Outlier Factor (LOF)
+           - Stacking de différents détecteurs
+           - Vote majoritaire
+        
+        2. **Features engineering** :
+           - Features temporelles (tendance, saisonnalité)
+           - Features de réseau (relations entre utilisateurs)
+           - Encodages avancés des catégories
+        
+        3. **Validation** :
+           - Validation temporelle (train/test sur périodes différentes)
+           - Simulation d'anomalies pour évaluation
+           - Métriques métier spécifiques
+        
+        4. **Monitoring** :
+           - Détection de concept drift
+           - Mise à jour incrémentale du modèle
+           - Alertes en temps réel
+        """)
+    
+    with tab3:
+        st.markdown("""
+        ### Applications métier dans la fintech
+        
+        **💰 Cas d'usage :**
+        
+        1. **Détection de fraude** :
+           - Transactions anormalement élevées
+           - Patterns de cashback suspects
+           - Multi-comptes abusifs
+        
+        2. **Surveillance réglementaire** :
+           - Conformité AML (Anti-Money Laundering)
+           - Détection de blanchiment
+           - Transactions Politically Exposed Persons (PEP)
+        
+        3. **Expérience client** :
+           - Détection de bugs d'application
+           - Transactions erronées
+           - Problèmes de conversion devise
+        
+        4. **Business intelligence** :
+           - Identification de segments spéciaux
+           - Opportunités marketing
+           - Optimisation des commissions
+        
+        **📊 ROI potentiel :**
+        - Réduction des pertes par fraude : **5-15%**
+        - Amélioration de l'expérience client : **+20% NPS**
+        - Conformité réglementaire : **Évite amendes**
+        """)
+        
 def page_xai(df_raw, tx_features):
     """Page d'explications SHAP."""
     st.markdown('<h1 class="main-header">🤖 Explications par SHAP</h1>', unsafe_allow_html=True)
