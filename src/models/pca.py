@@ -19,17 +19,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-from src.models.pca import (
-     
-    get_pca_summary, 
-    get_top_loadings,
-    create_scree_plot,
-    create_correlation_circle,
-    create_biplot,
-    create_3d_pca_plot,
-    generate_pca_report,
-    suggest_optimal_components
-)
+
 # ============================================================================
 # FONCTIONS UTILITAIRES
 # ============================================================================
