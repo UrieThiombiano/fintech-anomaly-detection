@@ -13,7 +13,6 @@ from src.utils import scale_features
 
 logger = get_logger(__name__)
 
-
 def compute_elbow_curve(
     X: pd.DataFrame,
     k_min: int = 2,
@@ -22,20 +21,14 @@ def compute_elbow_curve(
 ) -> Tuple[List[int], List[float]]:
     """
     Calcule la courbe du coude pour KMeans.
-    
-    Args:
-        X: Données d'entrée
-        k_min: Nombre minimum de clusters
-        k_max: Nombre maximum de clusters
-        random_state: Seed pour la reproductibilité
-        
-    Returns:
-        Tuple (liste des k, liste des inerties)
     """
     logger.info(f"Calcul de la courbe du coude pour k de {k_min} à {k_max}")
     
+    # Préparer les données
+    X_clean = prepare_data_for_clustering(X)
+    
     # Standardisation
-    X_scaled, _ = scale_features(X)
+    X_scaled, _, _ = scale_features(X_clean)  # Modification ici
     
     ks = list(range(k_min, k_max + 1))
     inertias = []
@@ -52,6 +45,94 @@ def compute_elbow_curve(
     
     return ks, inertias
 
+
+def train_kmeans(
+    X: pd.DataFrame,
+    n_clusters: int,
+    use_pca: bool = True,
+    n_components: int = 2,
+    random_state: int = 42
+) -> Dict:
+    """
+    Entraîne un modèle KMeans sur les données.
+    """
+    logger.info(f"Entraînement KMeans avec {n_clusters} clusters")
+    
+    # Préparer les données
+    X_clean = prepare_data_for_clustering(X)
+    
+    # Standardisation
+    X_scaled, scaler, numeric_cols = scale_features(X_clean)  # Modification ici
+    
+    # PCA optionnel
+    if use_pca:
+        from sklearn.decomposition import PCA
+        pca = PCA(n_components=min(n_components, X_scaled.shape[1]), random_state=random_state)
+        X_transformed = pca.fit_transform(X_scaled)
+        logger.info(f"PCA appliquée: {X_transformed.shape[1]} composantes, "
+                   f"variance expliquée: {pca.explained_variance_ratio_.sum():.3f}")
+    else:
+        pca = None
+        X_transformed = X_scaled
+    
+    # KMeans
+    kmeans = KMeans(
+        n_clusters=n_clusters,
+        random_state=random_state,
+        n_init='auto'
+    )
+    cluster_labels = kmeans.fit_predict(X_transformed)
+    
+    # Métriques de qualité
+    silhouette = silhouette_score(X_transformed, cluster_labels)
+    db_index = davies_bouldin_score(X_transformed, cluster_labels)
+    
+    result = {
+        'scaler': scaler,
+        'pca': pca,
+        'kmeans': kmeans,
+        'cluster_labels': cluster_labels,
+        'X_transformed': X_transformed,
+        'X_clean': X_clean,
+        'silhouette_score': silhouette,
+        'davies_bouldin_score': db_index,
+        'inertia': kmeans.inertia_,
+        'n_clusters': n_clusters,
+        'feature_names': numeric_cols
+    }
+    
+    logger.info(f"KMeans entraîné: silhouette={silhouette:.3f}, "
+               f"DB index={db_index:.3f}, inertia={kmeans.inertia_:.2f}")
+    
+    return result
+
+
+def prepare_data_for_clustering(X: pd.DataFrame) -> pd.DataFrame:
+    """
+    Prépare les données pour le clustering.
+    """
+    X_clean = X.copy()
+    
+    # 1. Supprimer les colonnes avec toutes les valeurs manquantes
+    X_clean = X_clean.dropna(axis=1, how='all')
+    
+    # 2. Supprimer les colonnes non-numériques
+    non_numeric_cols = X_clean.select_dtypes(exclude=[np.number]).columns.tolist()
+    if non_numeric_cols:
+        logger.warning(f"Suppression des colonnes non-numériques pour clustering: {non_numeric_cols}")
+        X_clean = X_clean.drop(columns=non_numeric_cols)
+    
+    # 3. Remplir les valeurs manquantes
+    numeric_cols = X_clean.select_dtypes(include=[np.number]).columns
+    if not numeric_cols.empty:
+        X_clean[numeric_cols] = X_clean[numeric_cols].fillna(X_clean[numeric_cols].median())
+    
+    # 4. Vérifier qu'il reste des colonnes
+    if X_clean.shape[1] == 0:
+        raise ValueError("Aucune colonne numérique disponible pour clustering")
+    
+    logger.info(f"Données préparées pour clustering: {X_clean.shape}")
+    return X_clean
 
 def compute_silhouette_scores(
     X: pd.DataFrame,

@@ -21,20 +21,14 @@ def compute_pca(
 ) -> Dict:
     """
     Calcule une PCA sur les données.
-    
-    Args:
-        X: Données d'entrée
-        n_components: Nombre de composantes (si None, déterminé par variance_threshold)
-        variance_threshold: Seuil de variance cumulée pour déterminer n_components
-        random_state: Seed pour la reproductibilité
-        
-    Returns:
-        Dictionnaire avec les résultats de la PCA
     """
     logger.info(f"Calcul de la PCA sur données de shape {X.shape}")
     
-    # Standardisation
-    X_scaled, scaler = scale_features(X)
+    # Vérifier et préparer les données
+    X_clean = prepare_data_for_pca(X)
+    
+    # Standardisation - modification ici pour utiliser 3 retours
+    X_scaled, scaler, numeric_cols = scale_features(X_clean)
     
     # Détermination du nombre de composantes si non spécifié
     if n_components is None:
@@ -67,8 +61,9 @@ def compute_pca(
         'explained_variance_ratio': explained_variance,
         'cumulative_variance': cumulative_variance,
         'loadings': loadings,
-        'feature_names': X.columns.tolist(),
-        'n_components': n_components
+        'feature_names': numeric_cols if numeric_cols else list(range(X_scaled.shape[1])),
+        'n_components': n_components,
+        'original_data': X_clean  # Garder une copie des données originales nettoyées
     }
     
     logger.info(f"PCA terminée: {n_components} composantes, "
@@ -76,6 +71,48 @@ def compute_pca(
     
     return result
 
+
+def prepare_data_for_pca(X: pd.DataFrame) -> pd.DataFrame:
+    """
+    Prépare les données pour PCA en gérant les valeurs manquantes et non-numériques.
+    """
+    X_clean = X.copy()
+    
+    # 1. Supprimer les colonnes avec toutes les valeurs manquantes
+    X_clean = X_clean.dropna(axis=1, how='all')
+    
+    # 2. Identifier les colonnes non-numériques
+    non_numeric_cols = X_clean.select_dtypes(exclude=[np.number]).columns.tolist()
+    
+    if non_numeric_cols:
+        logger.info(f"Colonnes non-numériques trouvées: {non_numeric_cols}")
+        
+        # Essayer de convertir les colonnes catégorielles en numériques
+        for col in non_numeric_cols:
+            if X_clean[col].nunique() < 10:  # Peu de catégories -> one-hot encoding
+                dummies = pd.get_dummies(X_clean[col], prefix=col, drop_first=True)
+                X_clean = pd.concat([X_clean, dummies], axis=1)
+            else:
+                # Trop de catégories, essayer un encodage ordinal simple
+                try:
+                    X_clean[col] = pd.factorize(X_clean[col])[0]
+                except:
+                    pass
+        
+        # Supprimer les colonnes originales non-numériques
+        X_clean = X_clean.drop(columns=non_numeric_cols)
+    
+    # 3. Remplir les valeurs manquantes
+    numeric_cols = X_clean.select_dtypes(include=[np.number]).columns
+    if not numeric_cols.empty:
+        X_clean[numeric_cols] = X_clean[numeric_cols].fillna(X_clean[numeric_cols].median())
+    
+    # 4. Vérifier qu'il reste des colonnes numériques
+    if X_clean.shape[1] == 0:
+        raise ValueError("Aucune colonne numérique disponible pour PCA après nettoyage")
+    
+    logger.info(f"Données préparées pour PCA: {X_clean.shape}")
+    return X_clean
 
 def get_pca_summary(pca_result: Dict) -> pd.DataFrame:
     """
