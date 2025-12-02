@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 from src.models.pca import (
-    compute_pca, 
+     
     get_pca_summary, 
     get_top_loadings,
     create_scree_plot,
