@@ -24,7 +24,7 @@ DEFAULT_N_CLUSTERS = 4
 DEFAULT_CONTAMINATION = 0.02
 DEFAULT_PCA_N_COMPONENTS = 3
 
-# Colonnes attendues dans les données brutes
+# Colonnes attendues dans les données brutes - AJOUTEZ CES LIGNES
 EXPECTED_COLUMNS = [
     'user_id', 'transaction_id', 'transaction_date',
     'product_category', 'product_amount', 'transaction_fee',
