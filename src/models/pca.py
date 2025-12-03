@@ -810,6 +810,101 @@ def create_3d_pca_plot(pca_result: Dict) -> go.Figure:
         return fig
 
 
+def create_quality_representation_plot(pca_result: Dict) -> go.Figure:
+    """
+    Crée un graphique de la qualité de représentation des individus.
+    
+    Args:
+        pca_result: Résultat de la PCA
+        
+    Returns:
+        Figure Plotly
+    """
+    try:
+        cos2 = pca_result['metrics']['cos2_individuals']
+        
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                "Distribution de la qualité de représentation",
+                "Qualité vs Distance au centre",
+                "Histogramme de la qualité",
+                "Individus mal représentés"
+            )
+        )
+        
+        # Distribution
+        fig.add_trace(
+            go.Box(y=cos2, name="Cos2", boxmean=True),
+            row=1, col=1
+        )
+        
+        # Qualité vs distance
+        try:
+            distances = np.sqrt(np.sum(pca_result['X_pca']**2, axis=1))
+            fig.add_trace(
+                go.Scatter(
+                    x=distances, y=cos2,
+                    mode='markers',
+                    marker=dict(size=5, opacity=0.6),
+                    hovertemplate="Distance: %{x:.2f}<br>Qualité: %{y:.2f}<extra></extra>"
+                ),
+                row=1, col=2
+            )
+        except:
+            pass
+        
+        # Histogramme
+        fig.add_trace(
+            go.Histogram(x=cos2, nbinsx=20, name="Distribution"),
+            row=2, col=1
+        )
+        
+        # Individus mal représentés (cos2 < 0.5)
+        try:
+            poorly_represented = cos2 < 0.5
+            if np.any(poorly_represented):
+                fig.add_trace(
+                    go.Scatter(
+                        x=np.where(poorly_represented)[0],
+                        y=cos2[poorly_represented],
+                        mode='markers',
+                        marker=dict(color='red', size=10),
+                        name="Mal représentés",
+                        hovertemplate="Individu %{x}<br>Qualité: %{y:.2f}<extra></extra>"
+                    ),
+                    row=2, col=2
+                )
+        except:
+            pass
+        
+        fig.update_layout(
+            title="Analyse de la qualité de représentation des individus",
+            height=700,
+            showlegend=False,
+            template="plotly_white"
+        )
+        
+        fig.update_xaxes(title_text="Qualité (cos2)", row=1, col=1)
+        fig.update_yaxes(title_text="Valeur", row=1, col=1)
+        fig.update_xaxes(title_text="Distance au centre", row=1, col=2)
+        fig.update_yaxes(title_text="Qualité (cos2)", row=1, col=2)
+        fig.update_xaxes(title_text="Qualité (cos2)", row=2, col=1)
+        fig.update_yaxes(title_text="Nombre d'individus", row=2, col=1)
+        fig.update_xaxes(title_text="Index individu", row=2, col=2)
+        fig.update_yaxes(title_text="Qualité (cos2)", row=2, col=2)
+        
+        return fig
+    except Exception as e:
+        logger.error(f"Erreur dans create_quality_representation_plot: {e}")
+        # Retourner une figure vide
+        fig = go.Figure()
+        fig.add_annotation(text="Erreur lors de la création du graphique",
+                          xref="paper", yref="paper",
+                          x=0.5, y=0.5, showarrow=False)
+        return fig
+
+
 # ============================================================================
 # FONCTIONS D'ANALYSE ET DE RAPPORT
 # ============================================================================
@@ -899,6 +994,95 @@ def get_top_loadings(
     except Exception as e:
         logger.error(f"Erreur dans get_top_loadings: {e}")
         return pd.DataFrame({'error': [str(e)]})
+
+
+def get_variable_contributions(pca_result: Dict) -> pd.DataFrame:
+    """
+    Calcule les contributions des variables à chaque composante.
+    
+    Args:
+        pca_result: Résultat de la PCA
+        
+    Returns:
+        DataFrame des contributions
+    """
+    try:
+        loadings = pca_result['loadings']
+        n_components = pca_result['n_components']
+        
+        contributions = (loadings**2) * 100 / np.sum(loadings**2, axis=0)
+        
+        df_contrib = pd.DataFrame(
+            contributions[:, :n_components],
+            columns=[f'PC{i+1}' for i in range(n_components)],
+            index=pca_result['feature_names']
+        )
+        
+        # Ajouter la contribution totale
+        df_contrib['total_contribution'] = df_contrib.sum(axis=1)
+        df_contrib['quality_representation'] = pca_result['metrics']['variable_cos2']
+        
+        return df_contrib.sort_values('total_contribution', ascending=False).round(4)
+    except Exception as e:
+        logger.error(f"Erreur dans get_variable_contributions: {e}")
+        return pd.DataFrame({'error': [str(e)]})
+
+
+def get_individual_analysis(pca_result: Dict, individual_idx: int = 0) -> Dict:
+    """
+    Analyse détaillée d'un individu spécifique.
+    
+    Args:
+        pca_result: Résultat de la PCA
+        individual_idx: Index de l'individu
+        
+    Returns:
+        Dictionnaire d'analyse
+    """
+    try:
+        if individual_idx >= len(pca_result['X_pca']):
+            raise ValueError(f"Individu {individual_idx} hors limites. Maximum: {len(pca_result['X_pca'])-1}")
+        
+        coordinates = pca_result['X_pca'][individual_idx]
+        cos2 = pca_result['metrics']['cos2_individuals'][individual_idx]
+        
+        # Distance au centre
+        distance = np.sqrt(np.sum(coordinates**2))
+        
+        # Coordonnées originales
+        try:
+            original_coords = pca_result['X_clean'].iloc[individual_idx]
+            original_dict = original_coords.to_dict()
+        except:
+            original_dict = {}
+        
+        # Contribution aux axes
+        try:
+            axis_contributions = (coordinates**2) * 100 / np.sum(coordinates**2)
+        except:
+            axis_contributions = np.ones_like(coordinates) * (100 / len(coordinates))
+        
+        # Qualité
+        if cos2 > 0.5:
+            quality = 'Bonne'
+        elif cos2 > 0.3:
+            quality = 'Moyenne'
+        else:
+            quality = 'Faible'
+        
+        analysis = {
+            'coordinates': coordinates,
+            'cos2': cos2,
+            'distance_to_center': distance,
+            'contributions_to_axes': axis_contributions,
+            'original_values': original_dict,
+            'quality': quality
+        }
+        
+        return analysis
+    except Exception as e:
+        logger.error(f"Erreur dans get_individual_analysis: {e}")
+        return {'error': str(e)}
 
 
 def suggest_optimal_components(pca_result: Dict, thresholds: List[float] = None) -> pd.DataFrame:
@@ -1046,95 +1230,6 @@ V. INTERPRÉTATION
         return f"❌ Erreur dans la génération du rapport: {str(e)}"
 
 
-def get_variable_contributions(pca_result: Dict) -> pd.DataFrame:
-    """
-    Calcule les contributions des variables à chaque composante.
-    
-    Args:
-        pca_result: Résultat de la PCA
-        
-    Returns:
-        DataFrame des contributions
-    """
-    try:
-        loadings = pca_result['loadings']
-        n_components = pca_result['n_components']
-        
-        contributions = (loadings**2) * 100 / np.sum(loadings**2, axis=0)
-        
-        df_contrib = pd.DataFrame(
-            contributions[:, :n_components],
-            columns=[f'PC{i+1}' for i in range(n_components)],
-            index=pca_result['feature_names']
-        )
-        
-        # Ajouter la contribution totale
-        df_contrib['total_contribution'] = df_contrib.sum(axis=1)
-        df_contrib['quality_representation'] = pca_result['metrics']['variable_cos2']
-        
-        return df_contrib.sort_values('total_contribution', ascending=False).round(4)
-    except Exception as e:
-        logger.error(f"Erreur dans get_variable_contributions: {e}")
-        return pd.DataFrame({'error': [str(e)]})
-
-
-def get_individual_analysis(pca_result: Dict, individual_idx: int = 0) -> Dict:
-    """
-    Analyse détaillée d'un individu spécifique.
-    
-    Args:
-        pca_result: Résultat de la PCA
-        individual_idx: Index de l'individu
-        
-    Returns:
-        Dictionnaire d'analyse
-    """
-    try:
-        if individual_idx >= len(pca_result['X_pca']):
-            raise ValueError(f"Individu {individual_idx} hors limites. Maximum: {len(pca_result['X_pca'])-1}")
-        
-        coordinates = pca_result['X_pca'][individual_idx]
-        cos2 = pca_result['metrics']['cos2_individuals'][individual_idx]
-        
-        # Distance au centre
-        distance = np.sqrt(np.sum(coordinates**2))
-        
-        # Coordonnées originales
-        try:
-            original_coords = pca_result['X_clean'].iloc[individual_idx]
-            original_dict = original_coords.to_dict()
-        except:
-            original_dict = {}
-        
-        # Contribution aux axes
-        try:
-            axis_contributions = (coordinates**2) * 100 / np.sum(coordinates**2)
-        except:
-            axis_contributions = np.ones_like(coordinates) * (100 / len(coordinates))
-        
-        # Qualité
-        if cos2 > 0.5:
-            quality = 'Bonne'
-        elif cos2 > 0.3:
-            quality = 'Moyenne'
-        else:
-            quality = 'Faible'
-        
-        analysis = {
-            'coordinates': coordinates,
-            'cos2': cos2,
-            'distance_to_center': distance,
-            'contributions_to_axes': axis_contributions,
-            'original_values': original_dict,
-            'quality': quality
-        }
-        
-        return analysis
-    except Exception as e:
-        logger.error(f"Erreur dans get_individual_analysis: {e}")
-        return {'error': str(e)}
-
-
 # ============================================================================
 # FONCTION D'EXPORT POUR STREAMLIT
 # ============================================================================
@@ -1169,86 +1264,3 @@ def get_pca_dashboard_data(pca_result: Dict) -> Dict:
     except Exception as e:
         logger.error(f"Erreur dans get_pca_dashboard_data: {e}")
         return {'error': str(e)}
-
-
-# ============================================================================
-# FONCTION DE TEST
-# ============================================================================
-
-def test_pca_module():
-    """
-    Teste le module PCA avec des données synthétiques.
-    """
-    import sys
-    
-    logger.info("🧪 Démarrage du test PCA...")
-    
-    try:
-        # Créer des données de test
-        np.random.seed(42)
-        n_samples = 100
-        n_features = 10
-        
-        # Créer des données corrélées
-        X = np.random.randn(n_samples, n_features)
-        # Ajouter de la corrélation
-        X[:, 2] = X[:, 0] + 0.5 * X[:, 1] + 0.1 * np.random.randn(n_samples)
-        X[:, 3] = X[:, 0] - 0.3 * X[:, 1] + 0.2 * np.random.randn(n_samples)
-        
-        # Convertir en DataFrame
-        df = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(n_features)])
-        
-        logger.info(f"✅ Données de test créées: {df.shape}")
-        
-        # Tester la PCA
-        logger.info("🚀 Test de la PCA...")
-        pca_result = compute_pca(df, n_components=3)
-        
-        # Vérifications
-        assert 'X_pca' in pca_result, "❌ X_pca manquant"
-        assert 'explained_variance_ratio' in pca_result, "❌ explained_variance_ratio manquant"
-        assert 'cumulative_variance' in pca_result, "❌ cumulative_variance manquant"
-        assert 'n_components' in pca_result, "❌ n_components manquant"
-        
-        logger.info(f"✅ PCA réussie!")
-        logger.info(f"   Composantes: {pca_result['n_components']}")
-        logger.info(f"   Variance totale: {pca_result['cumulative_variance'][-1]:.3f}")
-        
-        # Tester les visualisations
-        logger.info("🎨 Test des visualisations...")
-        try:
-            fig1 = create_scree_plot(pca_result)
-            logger.info("✅ Scree plot créé")
-            
-            fig2 = create_correlation_circle(pca_result)
-            logger.info("✅ Cercle des corrélations créé")
-        except Exception as e:
-            logger.warning(f"⚠ Erreur dans les visualisations: {e}")
-        
-        # Tester le rapport
-        logger.info("📄 Test du rapport...")
-        try:
-            report = generate_pca_report(pca_result)
-            logger.info("✅ Rapport généré")
-        except Exception as e:
-            logger.warning(f"⚠ Erreur dans le rapport: {e}")
-        
-        logger.info("🎉 Tous les tests ont réussi!")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Échec du test: {e}", exc_info=True)
-        return False
-
-
-if __name__ == "__main__":
-    # Exécuter le test
-    success = test_pca_module()
-    if success:
-        print("\n" + "="*50)
-        print("✅ TOUS LES TESTS ONT RÉUSSI!")
-        print("="*50)
-    else:
-        print("\n" + "="*50)
-        print("❌ CERTAINS TESTS ONT ÉCHOUÉ")
-        print("="*50)

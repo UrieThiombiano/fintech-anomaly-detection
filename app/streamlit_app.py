@@ -19,7 +19,22 @@ from plotly.subplots import make_subplots
 from src.data.loader import load_uploaded_file
 from src.features.user_features import build_user_features, get_user_feature_description
 from src.features.transaction_features import build_transaction_features, get_transaction_feature_description
-from src.models.pca import compute_pca, get_pca_summary, get_top_loadings
+# Ligne 22 de votre app_streamlit.py - REMPLACEZ par :
+from src.models.pca import (
+    compute_pca, 
+    get_pca_summary, 
+    get_top_loadings,
+    create_scree_plot,
+    create_correlation_circle,
+    create_biplot,
+    create_3d_pca_plot,
+    create_quality_representation_plot,
+    generate_pca_report,
+    suggest_optimal_components,
+    get_variable_contributions,
+    get_individual_analysis
+)
+
 from src.models.clustering import (
     compute_elbow_curve, compute_silhouette_scores, 
     train_kmeans, get_cluster_profiles, suggest_optimal_k
